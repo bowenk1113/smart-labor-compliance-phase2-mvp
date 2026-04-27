@@ -1,0 +1,36 @@
+# IDE configurations
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Build outputs (already handled in subdirectories)
+# But keep this as a catch-all
+build/
+dist/
+
+# Environment variables
+.env
+.env.local
+
+# Virtual environments (already handled in backend)
+venv/
+.venv/
+env/
+
+# Node modules (already handled in frontend)
+node_modules/
