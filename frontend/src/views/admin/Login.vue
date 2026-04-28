@@ -61,16 +61,12 @@ const handleLogin = async () => {
   try {
     const res = await adminLogin(form.value)
     
-    if (res.success) {
-      localStorage.setItem('admin_token', res.data.token)
-      localStorage.setItem('admin_id', res.data.admin_id)
-      localStorage.setItem('admin_username', res.data.username)
-      router.push('/admin')
-    } else {
-      error.value = res.error || '登录失败'
-    }
+    localStorage.setItem('admin_token', res.access_token)
+    localStorage.setItem('admin_id', res.admin_id)
+    localStorage.setItem('admin_username', res.username)
+    router.push('/admin')
   } catch (err) {
-    error.value = '网络错误，请重试'
+    error.value = err.response?.data?.detail || '登录失败，请检查用户名和密码'
   } finally {
     loading.value = false
   }
