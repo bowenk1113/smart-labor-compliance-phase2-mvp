@@ -1,11 +1,13 @@
-"""
-反馈路由
-"""
+"""反馈路由。"""
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+
 from app.database import get_db
-from app.schemas.feedback import FeedbackCreate, FeedbackUpdate, FeedbackResponse
-from app.models.feedback import Feedback
+from app.dependencies import get_admin_tenant_filter, get_current_admin, get_public_tenant, normalize_pagination
+from app.models import ChatLog, Feedback, Tenant
+from app.response import ok, page as page_response
+from app.schemas.feedback import FeedbackCreate, FeedbackUpdate
+from app.security import sanitize_text
 
 router = APIRouter(prefix="/api", tags=["反馈"])
 
@@ -13,55 +15,71 @@ router = APIRouter(prefix="/api", tags=["反馈"])
 @router.post("/feedback")
 async def create_feedback(
     request: FeedbackCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    header_tenant: Tenant = Depends(get_public_tenant),
 ):
-    """
-    提交反馈
-    """
+    tenant = header_tenant
+    if request.tenant_code and request.tenant_code != tenant.code:
+        tenant = db.query(Tenant).filter(Tenant.code == request.tenant_code, Tenant.status == "active").first()
+        if not tenant:
+            raise HTTPException(status_code=404, detail="租户不存在或已停用")
+
+    if request.question_id:
+        exists = db.query(ChatLog).filter(ChatLog.id == request.question_id, ChatLog.tenant_id == tenant.id).first()
+        if not exists:
+            raise HTTPException(status_code=404, detail="问答记录不存在")
+
     feedback = Feedback(
+        tenant_id=tenant.id,
         question_id=request.question_id,
-        user_id=request.user_id,
+        user_id=sanitize_text(request.user_id) or "anonymous",
         is_helpful=request.is_helpful,
-        remark=request.remark,
-        status="pending"
+        remark=sanitize_text(request.remark),
+        status="pending",
     )
-    
     db.add(feedback)
     db.commit()
     db.refresh(feedback)
-    
-    return {
-        "success": True,
-        "message": "反馈提交成功",
-        "data": {"id": feedback.id}
-    }
+    return ok({"id": feedback.id}, "反馈提交成功")
 
 
-# 管理端反馈路由
-from app.routers.admin import get_current_admin
-
-
-@router.get("/admin/feedbacks", response_model=list)
+@router.get("/admin/feedbacks")
 async def get_feedbacks(
-    status: str = None,
+    tenant_id: int | None = None,
+    status: str | None = None,
+    is_helpful: bool | None = None,
     page: int = 1,
     page_size: int = 20,
     db: Session = Depends(get_db),
-    current_admin: dict = Depends(get_current_admin)
+    current_admin: dict = Depends(get_current_admin),
 ):
-    """
-    获取反馈列表（管理端）
-    """
+    page, page_size = normalize_pagination(page, page_size)
+    allowed_tenant_id = get_admin_tenant_filter(current_admin, tenant_id)
     query = db.query(Feedback)
-    
+    if allowed_tenant_id:
+        query = query.filter(Feedback.tenant_id == allowed_tenant_id)
     if status:
         query = query.filter(Feedback.status == status)
-    
+    if is_helpful is not None:
+        query = query.filter(Feedback.is_helpful.is_(is_helpful))
     total = query.count()
-    offset = (page - 1) * page_size
-    feedbacks = query.order_by(Feedback.created_at.desc()).offset(offset).limit(page_size).all()
-    
-    return feedbacks
+    items = query.order_by(Feedback.id.asc()).offset((page - 1) * page_size).limit(page_size).all()
+    data = [
+        {
+            "id": item.id,
+            "tenant_id": item.tenant_id,
+            "tenant_name": item.tenant.name if item.tenant else "",
+            "question_id": item.question_id,
+            "question": item.chat_log.question if item.chat_log else "",
+            "user_id": item.user_id,
+            "is_helpful": item.is_helpful,
+            "remark": item.remark,
+            "status": item.status,
+            "created_at": item.created_at,
+        }
+        for item in items
+    ]
+    return page_response(data, total, page, page_size)
 
 
 @router.put("/admin/feedbacks/{feedback_id}")
@@ -69,23 +87,16 @@ async def update_feedback(
     feedback_id: int,
     request: FeedbackUpdate,
     db: Session = Depends(get_db),
-    current_admin: dict = Depends(get_current_admin)
+    current_admin: dict = Depends(get_current_admin),
 ):
-    """
-    更新反馈状态（管理端）
-    """
     feedback = db.query(Feedback).filter(Feedback.id == feedback_id).first()
-    
     if not feedback:
         raise HTTPException(status_code=404, detail="反馈不存在")
-    
+    get_admin_tenant_filter(current_admin, feedback.tenant_id)
     if request.status:
+        if request.status not in {"pending", "processing", "resolved", "ignored"}:
+            raise HTTPException(status_code=400, detail="无效的反馈状态")
         feedback.status = request.status
-    
     db.commit()
     db.refresh(feedback)
-    
-    return {
-        "success": True,
-        "message": "更新成功"
-    }
+    return ok(message="反馈更新成功")

@@ -1,15 +1,3 @@
 <template>
-  <div id="app">
-    <router-view />
-  </div>
+  <router-view />
 </template>
-
-<script setup>
-</script>
-
-<style>
-#app {
-  min-height: 100vh;
-  background-color: #f5f7fa;
-}
-</style>

@@ -1,356 +1,235 @@
 <template>
-  <div class="admin-layout">
-    <!-- 侧边栏 -->
-    <aside class="sidebar">
-      <div class="sidebar-header">
-        <h2>管理后台</h2>
+  <AdminLayout :title="t('logsTitle')" :subtitle="t('logsSubtitle')">
+    <section class="panel">
+      <div class="toolbar" style="margin-bottom: 14px">
+        <input v-model="keyword" class="input" style="max-width: 320px" :placeholder="t('searchQuestion')" />
+        <AppSelect v-model="status" style="width: 140px" :options="statusOptions" />
+        <button class="btn primary" @click="queryLogs">{{ t('query') }}</button>
       </div>
-      <nav class="sidebar-nav">
-        <router-link to="/admin">概览</router-link>
-        <router-link to="/admin/logs">问答日志</router-link>
-        <router-link to="/admin/feedbacks">反馈管理</router-link>
-        <router-link to="/admin/faqs">FAQ管理</router-link>
-        <router-link to="/admin/sources">来源管理</router-link>
-        <router-link to="/admin/packages">知识包管理</router-link>
-        <a href="#" @click.prevent="logout">退出登录</a>
-      </nav>
-    </aside>
+      <AppTable :columns="logColumns" :rows="logs" :empty-text="t('noLogs')" :sequence-start="sequenceStart">
+        <template #cell-risk_level="{ row }">
+          <span :class="['tag', riskClass(row.risk_level)]">{{ riskLabel(row.risk_level) }}</span>
+        </template>
+        <template #cell-response_time="{ row }">
+          <EllipsisText :value="`${row.response_time}ms`" />
+        </template>
+        <template #cell-created_at="{ row }">
+          <EllipsisText :value="formatTime(row.created_at)" />
+        </template>
+        <template #cell-action="{ row }">
+          <div class="table-actions">
+            <button class="btn" @click="openLogDetail(row.id)">{{ t('viewDetail') }}</button>
+          </div>
+        </template>
+      </AppTable>
+      <AppPagination v-model:page="page" v-model:page-size="pageSize" :total="total" @change="fetchLogs" />
+    </section>
 
-    <!-- 主内容区 -->
-    <main class="main-content">
-      <div class="content-header">
-        <h1>问答日志</h1>
-        <span class="username">{{ username }}</span>
-      </div>
-
-      <div class="container">
-        <!-- 搜索栏 -->
-        <div class="card">
-          <div class="search-bar">
-            <input 
-              v-model="searchKeyword" 
-              type="text" 
-              class="input" 
-              placeholder="搜索问题内容..."
-              style="width: 300px;"
-            />
-            <select v-model="statusFilter" class="input" style="width: 150px;">
-              <option value="">全部状态</option>
-              <option value="success">成功</option>
-              <option value="failed">失败</option>
-            </select>
-            <button class="btn btn-primary" @click="searchLogs">搜索</button>
+    <Teleport to="body">
+      <div v-if="detailModalOpen" class="modal-mask">
+        <div class="modal log-detail-modal">
+          <div class="section-title">
+            <h2>{{ t('logDetail') }}</h2>
+            <button class="btn ghost" type="button" @click="closeLogDetail">×</button>
+          </div>
+          <div v-if="selectedLog" class="log-detail">
+            <div class="detail-grid">
+              <div>
+                <span>{{ t('tenant') }}</span>
+                <strong>{{ selectedLog.tenant?.name || selectedLog.tenant_name || '-' }}</strong>
+              </div>
+              <div>
+                <span>{{ t('userId') }}</span>
+                <strong>{{ selectedLog.user_id || '-' }}</strong>
+              </div>
+              <div>
+                <span>{{ t('risk') }}</span>
+                <strong>{{ riskLabel(selectedLog.risk_level) || '-' }}</strong>
+              </div>
+              <div>
+                <span>{{ t('engine') }}</span>
+                <strong>{{ selectedLog.provider || '-' }}</strong>
+              </div>
+              <div>
+                <span>{{ t('response') }}</span>
+                <strong>{{ selectedLog.response_time ?? '-' }}ms</strong>
+              </div>
+              <div>
+                <span>{{ t('time') }}</span>
+                <strong>{{ formatTime(selectedLog.created_at) || '-' }}</strong>
+              </div>
+            </div>
+            <section>
+              <h3>{{ t('question') }}</h3>
+              <p class="preline">{{ selectedLog.question }}</p>
+            </section>
+            <section>
+              <h3>{{ t('answer') }}</h3>
+              <p class="preline">{{ selectedLog.answer || '-' }}</p>
+            </section>
+            <section v-if="sourceList.length">
+              <h3>{{ t('sourcesInfo') }}</h3>
+              <div class="log-sources">
+                <template v-for="source in sourceList" :key="source.title + source.url">
+                  <a
+                    v-if="validSourceUrl(source.url)"
+                    :href="source.url"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <strong>{{ source.title || source.url || '-' }}</strong>
+                    <span>{{ source.snippet || source.url || '' }}</span>
+                  </a>
+                  <div v-else class="log-source-card">
+                    <strong>{{ source.title || '-' }}</strong>
+                    <span>{{ source.snippet || source.url || '' }}</span>
+                  </div>
+                </template>
+              </div>
+            </section>
+            <div class="modal-actions">
+              <button class="btn primary" type="button" @click="closeLogDetail">{{ t('close') }}</button>
+            </div>
           </div>
         </div>
-
-        <!-- 日志列表 -->
-        <div class="card">
-          <table class="table">
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>用户问题</th>
-                <th>回答摘要</th>
-                <th>响应时间</th>
-                <th>状态</th>
-                <th>时间</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="item in logsList" :key="item.id">
-                <td>{{ item.id }}</td>
-                <td class="question-cell">{{ item.question }}</td>
-                <td class="answer-cell">{{ truncateText(item.answer) }}</td>
-                <td>{{ item.response_time }}ms</td>
-                <td>
-                  <span :class="['tag', item.status === 'success' ? 'tag-success' : 'tag-danger']">
-                    {{ item.status === 'success' ? '成功' : '失败' }}
-                  </span>
-                </td>
-                <td>{{ formatTime(item.created_at) }}</td>
-                <td>
-                  <button class="btn-link" @click="viewDetail(item)">查看</button>
-                </td>
-              </tr>
-              <tr v-if="logsList.length === 0">
-                <td colspan="7" class="empty">暂无数据</td>
-              </tr>
-            </tbody>
-          </table>
-
-          <!-- 分页 -->
-          <div v-if="total > pageSize" class="pagination">
-            <button @click="changePage(-1)" :disabled="page === 1">上一页</button>
-            <span>{{ page }} / {{ totalPages }}</span>
-            <button @click="changePage(1)" :disabled="page >= totalPages">下一页</button>
-          </div>
-        </div>
       </div>
-    </main>
-
-    <!-- 详情弹窗 -->
-    <div v-if="showDetail" class="modal" @click.self="showDetail = false">
-      <div class="modal-content">
-        <h3>问答详情</h3>
-        <div class="detail-item">
-          <label>问题：</label>
-          <p>{{ currentDetail.question }}</p>
-        </div>
-        <div class="detail-item">
-          <label>回答：</label>
-          <p>{{ currentDetail.answer }}</p>
-        </div>
-        <div class="detail-item">
-          <label>来源：</label>
-          <p>{{ currentDetail.sources ? currentDetail.sources.join(', ') : '无' }}</p>
-        </div>
-        <div class="detail-item">
-          <label>响应时间：</label>
-          <p>{{ currentDetail.response_time }}ms</p>
-        </div>
-        <div class="detail-item">
-          <label>状态：</label>
-          <p>{{ currentDetail.status }}</p>
-        </div>
-        <div class="detail-item">
-          <label>时间：</label>
-          <p>{{ formatTime(currentDetail.created_at) }}</p>
-        </div>
-        <button class="btn btn-primary" @click="showDetail = false">关闭</button>
-      </div>
-    </div>
-  </div>
+    </Teleport>
+  </AdminLayout>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
-import { getLogs } from '@/api'
+import { computed, onMounted, ref } from 'vue'
+import { getLogDetail, getLogs } from '@/api'
+import { useI18n } from '@/i18n'
+import AppPagination from '@/components/AppPagination.vue'
+import AppSelect from '@/components/AppSelect.vue'
+import AppTable from '@/components/AppTable.vue'
+import EllipsisText from '@/components/EllipsisText.vue'
+import AdminLayout from './AdminLayout.vue'
 
-const router = useRouter()
-const username = ref(localStorage.getItem('admin_username') || '管理员')
-
-const logsList = ref([])
+const { t, formatDateTime, riskLabel } = useI18n()
+const logs = ref([])
+const total = ref(0)
 const page = ref(1)
 const pageSize = ref(20)
-const total = ref(0)
-const searchKeyword = ref('')
-const statusFilter = ref('')
-const showDetail = ref(false)
-const currentDetail = ref({})
+const keyword = ref('')
+const status = ref('')
+const selectedLog = ref(null)
+const detailModalOpen = ref(false)
+const sequenceStart = computed(() => (page.value - 1) * pageSize.value + 1)
+const logColumns = computed(() => [
+  { key: 'sequence', label: t('sequence'), width: '64px', sticky: true },
+  { key: 'question', label: t('question'), width: '23%', sticky: true },
+  { key: 'tenant_name', label: t('tenant'), width: '13%' },
+  { key: 'answer', label: t('answerSummary'), width: '28%' },
+  { key: 'risk_level', label: t('risk'), width: '96px' },
+  { key: 'provider', label: t('engine'), width: '88px' },
+  { key: 'response_time', label: t('response'), width: '88px' },
+  { key: 'created_at', label: t('time'), width: '156px' },
+  { key: 'action', label: t('action'), width: '112px' }
+])
+const sourceList = computed(() => Array.isArray(selectedLog.value?.sources) ? selectedLog.value.sources : [])
+const statusOptions = computed(() => [
+  { value: '', label: t('allStatus') },
+  { value: 'success', label: t('statusSuccess') },
+  { value: 'failed', label: t('statusFailed') }
+])
 
-const totalPages = computed(() => Math.ceil(total.value / pageSize.value))
-
-// 获取日志列表
 const fetchLogs = async () => {
-  try {
-    const res = await getLogs({
-      page: page.value,
-      page_size: pageSize.value,
-      keyword: searchKeyword.value,
-      status: statusFilter.value
-    })
-    
-    if (res.success) {
-      logsList.value = res.data.list || []
-      total.value = res.data.total || 0
-    }
-  } catch (error) {
-    console.error('获取日志失败:', error)
-  }
+  const res = await getLogs({ keyword: keyword.value, status: status.value, page: page.value, page_size: pageSize.value })
+  logs.value = res.data?.list || []
+  total.value = res.data?.total || 0
 }
-
-// 搜索
-const searchLogs = () => {
+const queryLogs = () => {
   page.value = 1
   fetchLogs()
 }
-
-// 翻页
-const changePage = (delta) => {
-  const newPage = page.value + delta
-  if (newPage >= 1 && newPage <= totalPages.value) {
-    page.value = newPage
-    fetchLogs()
-  }
+const riskClass = (risk) => risk === 'high' ? 'danger' : risk === 'medium' ? 'warning' : 'success'
+const formatTime = (time) => formatDateTime(time)
+const openLogDetail = async (id) => {
+  const res = await getLogDetail(id)
+  selectedLog.value = res.data
+  detailModalOpen.value = true
 }
-
-// 查看详情
-const viewDetail = (item) => {
-  currentDetail.value = item
-  showDetail.value = true
+const closeLogDetail = () => {
+  detailModalOpen.value = false
+  selectedLog.value = null
 }
+const validSourceUrl = (url) => /^https?:\/\//i.test(url || '')
 
-// 截断文本
-const truncateText = (text) => {
-  if (!text) return ''
-  return text.length > 50 ? text.substring(0, 50) + '...' : text
-}
-
-// 格式化时间
-const formatTime = (time) => {
-  if (!time) return ''
-  const date = new Date(time)
-  return date.toLocaleString('zh-CN')
-}
-
-// 退出登录
-const logout = () => {
-  localStorage.removeItem('admin_token')
-  localStorage.removeItem('admin_id')
-  localStorage.removeItem('admin_username')
-  router.push('/admin/login')
-}
-
-onMounted(() => {
-  fetchLogs()
-})
+onMounted(fetchLogs)
 </script>
 
 <style scoped>
-.admin-layout {
-  display: flex;
-  min-height: 100vh;
+.log-detail-modal {
+  width: min(920px, calc(100vw - 32px));
 }
 
-.sidebar {
-  width: 220px;
-  background: #001529;
-  color: #fff;
-  position: fixed;
-  height: 100vh;
+.log-detail {
+  display: grid;
+  gap: 16px;
 }
 
-.sidebar-header {
-  padding: 20px;
-  border-bottom: 1px solid #ffffff1f;
-}
-
-.sidebar-header h2 {
-  margin: 0;
-  font-size: 18px;
-}
-
-.sidebar-nav {
-  padding: 10px 0;
-}
-
-.sidebar-nav a {
-  display: block;
-  padding: 12px 20px;
-  color: #ffffff99;
-  text-decoration: none;
-  transition: all 0.3s;
-}
-
-.sidebar-nav a:hover,
-.sidebar-nav a.router-link-active {
-  background: #1890ff;
-  color: #fff;
-}
-
-.main-content {
-  flex: 1;
-  margin-left: 220px;
-  background: #f0f2f5;
-  min-height: 100vh;
-}
-
-.content-header {
-  background: #fff;
-  padding: 15px 20px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-}
-
-.content-header h1 {
-  margin: 0;
-  font-size: 20px;
-}
-
-.search-bar {
-  display: flex;
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
-  align-items: center;
 }
 
-.question-cell {
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.answer-cell {
-  max-width: 150px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.btn-link {
-  background: none;
-  border: none;
-  color: #1890ff;
-  cursor: pointer;
-}
-
-.btn-link:hover {
-  text-decoration: underline;
-}
-
-/* 弹窗样式 */
-.modal {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  z-index: 1000;
-}
-
-.modal-content {
-  background: #fff;
-  padding: 30px;
+.detail-grid > div {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--line);
   border-radius: 8px;
-  max-width: 600px;
-  width: 90%;
-  max-height: 80vh;
-  overflow-y: auto;
+  background: var(--surface-soft);
 }
 
-.modal-content h3 {
-  margin-top: 0;
-  margin-bottom: 20px;
+.detail-grid span,
+.log-sources span {
+  color: var(--muted);
 }
 
-.detail-item {
-  margin-bottom: 15px;
+.log-detail h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
 }
 
-.detail-item label {
-  font-weight: 600;
-  color: #333;
+.log-detail p {
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
 }
 
-.detail-item p {
-  margin: 5px 0 0;
-  color: #666;
+.log-sources {
+  display: grid;
+  gap: 8px;
 }
 
-@media (max-width: 768px) {
-  .sidebar {
-    display: none;
+.log-sources a,
+.log-source-card {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  text-decoration: none;
+}
+
+.log-sources a:hover {
+  border-color: var(--primary);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+@media (max-width: 760px) {
+  .detail-grid {
+    grid-template-columns: 1fr;
   }
-  
-  .main-content {
-    margin-left: 0;
-  }
-}</style>
+}
+</style>

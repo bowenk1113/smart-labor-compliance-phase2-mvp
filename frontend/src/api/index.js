@@ -1,110 +1,99 @@
 import axios from 'axios'
 
+export const DEFAULT_TENANT_CODE = 'demo-sx'
+
 const api = axios.create({
   baseURL: '/api',
-  timeout: 30000,
+  timeout: 45000,
   headers: {
     'Content-Type': 'application/json'
   }
 })
 
-// 请求拦截器
+export const getTenantCode = () => localStorage.getItem('tenant_code') || DEFAULT_TENANT_CODE
+
+export const setTenantCode = (code) => {
+  localStorage.setItem('tenant_code', code || DEFAULT_TENANT_CODE)
+}
+
 api.interceptors.request.use(
   config => {
     const token = localStorage.getItem('admin_token')
     if (token) {
       config.headers.Authorization = `Bearer ${token}`
     }
+    if (config.data instanceof FormData) {
+      delete config.headers['Content-Type']
+    }
+    config.headers['X-Tenant-Code'] = getTenantCode()
     return config
   },
-  error => {
-    return Promise.reject(error)
-  }
+  error => Promise.reject(error)
 )
 
-// 响应拦截器
 api.interceptors.response.use(
-  response => {
-    return response.data
-  },
+  response => response.data,
   error => {
     const isLoginRequest = error.config?.url === '/admin/login'
     if (error.response?.status === 401 && !isLoginRequest) {
       localStorage.removeItem('admin_token')
+      localStorage.removeItem('admin_role')
       window.location.href = '/admin/login'
     }
     return Promise.reject(error)
   }
 )
 
-// ============ 用户端 API ============
+export const unwrapList = (res) => res?.data?.list || res?.data || []
+export const unwrapData = (res) => res?.data
 
-// 问答接口
 export const chat = (data) => api.post('/chat', data)
-
-// 获取历史记录
 export const getHistory = (params) => api.get('/history', { params })
-
-// 清空历史记录
 export const clearHistory = (userId) => api.delete('/history', { params: { user_id: userId } })
-
-// 提交反馈
 export const submitFeedback = (data) => api.post('/feedback', data)
-
-// 获取推荐问题
 export const getRecommendedQuestions = () => api.get('/recommended-questions')
+export const getTenantPublic = () => api.get('/tenant-public')
 
-// ============ 管理端 API ============
-
-// 管理员登录
 export const adminLogin = (data) => api.post('/admin/login', data)
-
-// 验证令牌
 export const verifyToken = () => api.get('/admin/verify-token')
+export const getStatistics = (params) => api.get('/admin/statistics', { params })
+export const getServiceStatus = () => api.get('/admin/service-status')
 
-// 获取统计概览
-export const getStatistics = () => api.get('/admin/statistics')
+export const getTenants = (params) => api.get('/admin/tenants', { params })
+export const addTenant = (data) => api.post('/admin/tenants', data)
+export const updateTenant = (id, data) => api.put(`/admin/tenants/${id}`, data)
 
-// 获取问答日志
 export const getLogs = (params) => api.get('/admin/logs', { params })
-
-// 获取问答详情
 export const getLogDetail = (id) => api.get(`/admin/logs/${id}`)
 
-// 获取反馈列表
 export const getFeedbacks = (params) => api.get('/admin/feedbacks', { params })
-
-// 更新反馈状态
 export const updateFeedbackStatus = (id, data) => api.put(`/admin/feedbacks/${id}`, data)
 
-// 获取 FAQ 列表
 export const getFaqs = (params) => api.get('/admin/faqs', { params })
-
-// 添加 FAQ
-export const addFaq = (data) => api.post('/admin/faqs', data)
-
-// 更新 FAQ
+export const addFaq = (data, params = {}) => api.post('/admin/faqs', data, { params })
 export const updateFaq = (id, data) => api.put(`/admin/faqs/${id}`, data)
-
-// 删除 FAQ
 export const deleteFaq = (id) => api.delete(`/admin/faqs/${id}`)
 
-// 获取来源列表
 export const getSources = (params) => api.get('/admin/sources', { params })
-
-// 添加来源
-export const addSource = (data) => api.post('/admin/sources', data)
-
-// 更新来源
+export const addSource = (data, params = {}) => api.post('/admin/sources', data, { params })
 export const updateSource = (id, data) => api.put(`/admin/sources/${id}`, data)
-
-// 删除来源
+export const reviewSource = (id, reviewStatus) => api.put(`/admin/sources/${id}`, { review_status: reviewStatus })
+export const uploadSourceFile = (file, params = {}) => {
+  const formData = new FormData()
+  formData.append('file', file)
+  return api.post('/admin/sources/upload', formData, { params })
+}
 export const deleteSource = (id) => api.delete(`/admin/sources/${id}`)
 
-// 获取知识包列表
-export const getKnowledgePackages = () => api.get('/admin/knowledge-packages')
-
-// 更新知识包状态
+export const getKnowledgePackages = (params) => api.get('/admin/knowledge-packages', { params })
 export const updatePackageStatus = (id, data) => api.put(`/admin/knowledge-packages/${id}/status`, data)
+
+export const getTestQuestions = (params) => api.get('/admin/test-questions', { params })
+
+export const getRoles = () => api.get('/admin/roles')
+export const getAdmins = (params) => api.get('/admin/admins', { params })
+export const addAdmin = (data) => api.post('/admin/admins', data)
+export const updateAdmin = (id, data) => api.put(`/admin/admins/${id}`, data)
+export const deleteAdmin = (id) => api.delete(`/admin/admins/${id}`)
 
 export default api

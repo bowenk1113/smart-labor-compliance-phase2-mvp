@@ -5,7 +5,15 @@ from app.schemas.chat import ChatRequest, ChatResponse, SourceInfo, TaskInfo, Hi
 from app.schemas.feedback import FeedbackCreate, FeedbackUpdate, FeedbackResponse
 from app.schemas.faq import FAQCreate, FAQUpdate, FAQResponse
 from app.schemas.source import SourceCreate, SourceUpdate, SourceResponse
-from app.schemas.admin import AdminLogin, AdminToken, AdminInfo, StatisticsResponse
+from app.schemas.admin import (
+    AdminLogin,
+    AdminToken,
+    AdminInfo,
+    StatisticsResponse,
+    TenantCreate,
+    TenantUpdate,
+    TenantResponse,
+)
 
 __all__ = [
     "ChatRequest",
@@ -26,5 +34,8 @@ __all__ = [
     "AdminLogin",
     "AdminToken",
     "AdminInfo",
-    "StatisticsResponse"
+    "StatisticsResponse",
+    "TenantCreate",
+    "TenantUpdate",
+    "TenantResponse",
 ]

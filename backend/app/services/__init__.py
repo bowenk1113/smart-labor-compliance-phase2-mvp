@@ -1,6 +1,4 @@
-"""
-服务包
-"""
-from app.services.dify_service import dify_service, get_dify_response
+"""服务包。"""
+from app.services.dify_service import ComplianceAnswerService, check_external_services
 
-__all__ = ["dify_service", "get_dify_response"]
+__all__ = ["ComplianceAnswerService", "check_external_services"]

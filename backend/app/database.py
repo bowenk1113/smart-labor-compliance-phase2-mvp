@@ -1,74 +1,139 @@
 """
-数据库连接配置 - MySQL
+数据库与运行配置。
+
+项目使用本机 Docker MySQL。为避免旧版演示表结构影响新项目，新的业务表统一使用
+`slc_` 前缀。
 """
-from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
-from pydantic_settings import BaseSettings
+import json
+from functools import lru_cache
+from typing import List
+from urllib.parse import quote_plus
+
 import pymysql
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings
+from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 
 class Settings(BaseSettings):
-    """数据库配置"""
-    db_host: str = "localhost"
+    """应用配置，支持通过 backend/.env 覆盖。"""
+
+    app_name: str = "企业用工与社保合规智能平台"
+    app_env: str = "development"
+    api_prefix: str = "/api"
+
+    db_host: str = "127.0.0.1"
     db_port: int = 3306
     db_user: str = "root"
-    db_password: str = "root1234"
+    db_password: str = "infini_rag_flow"
     db_name: str = "employment"
 
-    model_config = {"extra": "allow", "env_file": ".env"}
+    jwt_secret_key: str = "change-this-dev-secret-before-production"
+    jwt_expire_minutes: int = 480
+    password_min_length: int = 8
+
+    initial_admin_username: str = "admin"
+    initial_admin_password: str = "Admin@123456"
+    default_tenant_code: str = "demo-sx"
+
+    cors_origins: List[str] = Field(
+        default_factory=lambda: [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:4173",
+            "http://127.0.0.1:4173",
+        ]
+    )
+
+    max_request_bytes: int = 1024 * 1024
+    max_upload_bytes: int = 10 * 1024 * 1024
+    upload_dir: str = "storage/uploads"
+    rate_limit_window_seconds: int = 60
+    rate_limit_max_requests: int = 120
+
+    dify_base_url: str = "http://127.0.0.1/v1"
+    dify_api_key: str = ""
+    dify_timeout_seconds: int = 30
+
+    ragflow_base_url: str = "http://127.0.0.1:9380"
+    ragflow_web_url: str = "http://127.0.0.1:8880"
+    ragflow_api_key: str = ""
+    ragflow_timeout_seconds: int = 10
+
+    auto_seed: bool = True
+
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "extra": "allow",
+    }
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, value):
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
 
 
-# 加载配置
-settings = Settings()
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
 
 
-def create_database_if_not_exists():
-    """如果数据库不存在则创建"""
+settings = get_settings()
+
+
+def _safe_identifier(identifier: str) -> str:
+    return identifier.replace("`", "``")
+
+
+def create_database_if_not_exists() -> None:
+    """确保目标库存在。"""
+    connection = pymysql.connect(
+        host=settings.db_host,
+        port=settings.db_port,
+        user=settings.db_user,
+        password=settings.db_password,
+        charset="utf8mb4",
+        cursorclass=pymysql.cursors.DictCursor,
+        connect_timeout=10,
+    )
     try:
-        # 先连接到 MySQL 服务器（不指定数据库）
-        connection = pymysql.connect(
-            host=settings.db_host,
-            port=settings.db_port,
-            user=settings.db_user,
-            password=settings.db_password,
-            cursorclass=pymysql.cursors.DictCursor
-        )
-        
         with connection.cursor() as cursor:
-            # 创建数据库（如果不存在）
-            cursor.execute(f"CREATE DATABASE IF NOT EXISTS {settings.db_name} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
+            cursor.execute(
+                f"CREATE DATABASE IF NOT EXISTS `{_safe_identifier(settings.db_name)}` "
+                "CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+            )
         connection.commit()
+    finally:
         connection.close()
-        print(f"数据库 {settings.db_name} 检查/创建完成")
-    except Exception as e:
-        print(f"创建数据库失败: {e}")
 
 
-# 先确保数据库存在
 create_database_if_not_exists()
 
-# 数据库连接配置 - 使用 MySQL
-DATABASE_URL = f"mysql+pymysql://{settings.db_user}:{settings.db_password}@{settings.db_host}:{settings.db_port}/{settings.db_name}"
+DATABASE_URL = (
+    f"mysql+pymysql://{quote_plus(settings.db_user)}:{quote_plus(settings.db_password)}"
+    f"@{settings.db_host}:{settings.db_port}/{settings.db_name}?charset=utf8mb4"
+)
 
-# 创建引擎
 engine = create_engine(
     DATABASE_URL,
     echo=False,
     pool_pre_ping=True,
-    pool_size=5,
-    max_overflow=10
+    pool_recycle=1800,
+    pool_size=10,
+    max_overflow=20,
+    future=True,
 )
 
-# 创建会话工厂
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# 创建基类
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, future=True)
 Base = declarative_base()
 
 
 def get_db():
-    """获取数据库会话"""
+    """FastAPI 依赖：获取数据库会话。"""
     db = SessionLocal()
     try:
         yield db
@@ -76,8 +141,215 @@ def get_db():
         db.close()
 
 
-def init_db():
-    """初始化数据库表"""
-    from app.models import chat_log, feedback, faq, source, knowledge_package, admin
+def init_db() -> None:
+    """初始化表结构与演示数据。"""
+    from app.models import (
+        admin,
+        chat_log,
+        feedback,
+        faq,
+        knowledge_package,
+        source,
+        tenant,
+        test_question,
+    )
+
     Base.metadata.create_all(bind=engine)
-    print("数据库表初始化完成")
+    ensure_compat_columns()
+
+    if settings.auto_seed:
+        from app.services.seed_data import seed_initial_data
+
+        with SessionLocal() as db:
+            seed_initial_data(db)
+
+
+def ensure_compat_columns() -> None:
+    """为已存在的旧演示库补齐新增字段。"""
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+
+    def add_missing_columns(table_name: str, definitions: dict[str, str]) -> None:
+        if table_name not in tables:
+            return
+        columns = {column["name"] for column in inspector.get_columns(table_name)}
+        with engine.begin() as connection:
+            for column_name, ddl in definitions.items():
+                if column_name not in columns:
+                    connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {ddl}"))
+
+    def add_missing_indexes(table_name: str, definitions: dict[str, str]) -> None:
+        if table_name not in tables:
+            return
+        indexes = {
+            index["name"]
+            for index in inspector.get_indexes(table_name)
+        } | {
+            constraint["name"]
+            for constraint in inspector.get_unique_constraints(table_name)
+            if constraint.get("name")
+        }
+        with engine.begin() as connection:
+            for index_name, ddl in definitions.items():
+                if index_name not in indexes:
+                    connection.execute(text(f"ALTER TABLE {table_name} ADD INDEX {index_name} {ddl}"))
+
+    def add_missing_unique_indexes(table_name: str, definitions: dict[str, str]) -> None:
+        if table_name not in tables:
+            return
+        indexes = {
+            index["name"]
+            for index in inspector.get_indexes(table_name)
+        } | {
+            constraint["name"]
+            for constraint in inspector.get_unique_constraints(table_name)
+            if constraint.get("name")
+        }
+        with engine.begin() as connection:
+            for index_name, ddl in definitions.items():
+                if index_name not in indexes:
+                    connection.execute(text(f"ALTER TABLE {table_name} ADD UNIQUE KEY {index_name} {ddl}"))
+
+    add_missing_columns(
+        "slc_sources",
+        {
+            "source_code": "source_code VARCHAR(40) NULL AFTER tenant_id",
+            "reviewed_at": "reviewed_at DATETIME NULL AFTER review_status",
+            "reviewed_by": "reviewed_by VARCHAR(80) NULL AFTER reviewed_at",
+            "captured_at": "captured_at DATE NULL AFTER review_status",
+            "owner": "owner VARCHAR(80) NULL AFTER captured_at",
+            "local_file": "local_file VARCHAR(500) NULL AFTER owner",
+            "note": "note TEXT NULL AFTER local_file",
+        },
+    )
+    if "slc_sources" in tables:
+        with engine.begin() as connection:
+            connection.execute(text("UPDATE slc_sources SET issuer = '' WHERE issuer IS NULL"))
+            connection.execute(text("""
+                UPDATE slc_sources
+                SET reviewed_at = COALESCE(reviewed_at, created_at),
+                    reviewed_by = COALESCE(reviewed_by, owner, '系统初始化')
+                WHERE review_status IN ('已复核', 'reviewed')
+            """))
+            connection.execute(text("ALTER TABLE slc_sources MODIFY issuer VARCHAR(120) NOT NULL DEFAULT ''"))
+    add_missing_indexes("slc_sources", {"ix_slc_sources_source_code": "(source_code)"})
+    add_missing_columns("slc_faqs", {"faq_code": "faq_code VARCHAR(40) NULL AFTER tenant_id"})
+    add_missing_indexes("slc_faqs", {"ix_slc_faqs_faq_code": "(faq_code)"})
+    deduplicate_business_data()
+    add_missing_unique_indexes(
+        "slc_sources",
+        {
+            "uq_slc_sources_tenant_source_code": "(tenant_id, source_code)",
+            "uq_slc_sources_tenant_url": "(tenant_id, url)",
+            "uq_slc_sources_tenant_title_issuer": "(tenant_id, title, issuer)",
+        },
+    )
+    add_missing_unique_indexes(
+        "slc_faqs",
+        {
+            "uq_slc_faqs_tenant_faq_code": "(tenant_id, faq_code)",
+            "uq_slc_faqs_tenant_language_question": "(tenant_id, language, question)",
+        },
+    )
+
+
+def deduplicate_business_data() -> None:
+    """清理历史重复来源与 FAQ，只保留每组最早记录。"""
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    if "slc_sources" not in tables and "slc_faqs" not in tables:
+        return
+
+    def parse_json_ids(value) -> list:
+        if not value:
+            return []
+        if isinstance(value, list):
+            return value
+        try:
+            return json.loads(value)
+        except (TypeError, json.JSONDecodeError):
+            return []
+
+    def resolved_source_id(source_id: int, duplicate_map: dict[int, int]) -> int:
+        current = source_id
+        visited = set()
+        while current in duplicate_map and current not in visited:
+            visited.add(current)
+            current = duplicate_map[current]
+        return current
+
+    with engine.begin() as connection:
+        if "slc_sources" in tables:
+            source_rows = connection.execute(text("""
+                SELECT id, tenant_id, source_code, url, title, issuer
+                FROM slc_sources
+                ORDER BY id ASC
+            """)).mappings().all()
+            duplicate_map: dict[int, int] = {}
+            for fields in (("tenant_id", "source_code"), ("tenant_id", "url"), ("tenant_id", "title", "issuer")):
+                groups: dict[tuple, list[int]] = {}
+                for row in source_rows:
+                    key = tuple((row[field] or "").strip() if isinstance(row[field], str) else row[field] for field in fields)
+                    if any(value in (None, "") for value in key):
+                        continue
+                    groups.setdefault(key, []).append(row["id"])
+                for ids in groups.values():
+                    if len(ids) < 2:
+                        continue
+                    keep_id = min(ids)
+                    for source_id in ids:
+                        if source_id != keep_id:
+                            duplicate_map[source_id] = keep_id
+
+            duplicate_map = {
+                duplicate_id: resolved_source_id(keep_id, duplicate_map)
+                for duplicate_id, keep_id in duplicate_map.items()
+                if duplicate_id != resolved_source_id(keep_id, duplicate_map)
+            }
+
+            if duplicate_map and "slc_faqs" in tables:
+                faq_rows = connection.execute(text("""
+                    SELECT id, source_ids
+                    FROM slc_faqs
+                    WHERE source_ids IS NOT NULL
+                """)).mappings().all()
+                for row in faq_rows:
+                    raw_ids = parse_json_ids(row["source_ids"])
+                    normalized_ids = []
+                    changed = False
+                    for raw_id in raw_ids:
+                        try:
+                            source_id = int(raw_id)
+                        except (TypeError, ValueError):
+                            continue
+                        normalized_id = duplicate_map.get(source_id, source_id)
+                        changed = changed or normalized_id != source_id
+                        if normalized_id not in normalized_ids:
+                            normalized_ids.append(normalized_id)
+                    if changed:
+                        connection.execute(
+                            text("UPDATE slc_faqs SET source_ids = :source_ids WHERE id = :id"),
+                            {"source_ids": json.dumps(normalized_ids, ensure_ascii=False), "id": row["id"]},
+                        )
+
+            if duplicate_map:
+                delete_ids = ",".join(str(source_id) for source_id in sorted(duplicate_map))
+                connection.execute(text(f"DELETE FROM slc_sources WHERE id IN ({delete_ids})"))
+
+        if "slc_faqs" in tables:
+            connection.execute(text("""
+                DELETE f FROM slc_faqs f
+                JOIN slc_faqs kept
+                  ON f.tenant_id = kept.tenant_id
+                 AND f.faq_code = kept.faq_code
+                 AND f.id > kept.id
+                WHERE f.faq_code IS NOT NULL AND f.faq_code <> ''
+            """))
+            connection.execute(text("""
+                DELETE f FROM slc_faqs f
+                JOIN slc_faqs kept
+                  ON f.tenant_id = kept.tenant_id
+                 AND f.language = kept.language
+                 AND f.question = kept.question
+                 AND f.id > kept.id
+            """))

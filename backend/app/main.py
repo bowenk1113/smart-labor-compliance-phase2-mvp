@@ -1,70 +1,98 @@
-"""
-企业用工与社保合规智能平台 - FastAPI 应用入口
-"""
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+"""企业用工与社保合规智能平台 API 入口。"""
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
-from app.database import init_db
-from app.security import create_admin
-from app.routers import chat, feedback, admin
+from time import monotonic
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
+
+from app.database import init_db, settings
+from app.response import ok
+from app.routers import admin, chat, feedback
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+
+class RequestGuardMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app):
+        super().__init__(app)
+        self.buckets: dict[str, deque[float]] = defaultdict(deque)
+
+    async def dispatch(self, request: Request, call_next):
+        content_length = request.headers.get("content-length")
+        limit = settings.max_upload_bytes if request.url.path.endswith("/sources/upload") else settings.max_request_bytes
+        if content_length and int(content_length) > limit:
+            return JSONResponse(status_code=413, content={"detail": "请求体过大"})
+
+        client = request.client.host if request.client else "unknown"
+        now = monotonic()
+        bucket = self.buckets[client]
+        while bucket and now - bucket[0] > settings.rate_limit_window_seconds:
+            bucket.popleft()
+        if len(bucket) >= settings.rate_limit_max_requests:
+            return JSONResponse(status_code=429, content={"detail": "请求过于频繁，请稍后再试"})
+        bucket.append(now)
+        return await call_next(request)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期管理"""
-    # 启动时初始化数据库
-    try:
-        init_db()
-        create_admin("admin", "admin123")
-        print("数据库初始化完成")
-    except Exception as e:
-        print(f"数据库初始化失败: {e}")
+    init_db()
     yield
-    # 关闭时清理资源
-    print("应用正在关闭...")
 
 
-# 创建 FastAPI 应用
 app = FastAPI(
     title="企业用工与社保合规智能平台 API",
-    description="首期 MVP 聚焦陕西地区用工与社保合规场景",
-    version="1.0.0",
+    description="前后端分离、多租户隔离、Dify/RAGFlow 可配置接入的企业合规智能问答平台。",
+    version="2.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
-# 配置 CORS
+app.add_middleware(RequestGuardMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Tenant-Code"],
 )
 
-# 注册路由
 app.include_router(chat.router)
 app.include_router(feedback.router)
 app.include_router(admin.router)
 
 
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(status_code=exc.status_code, content={"success": False, "message": exc.detail, "data": None})
+
+
 @app.get("/")
 async def root():
-    """根路径"""
-    return {
-        "message": "企业用工与社保合规智能平台 API",
-        "version": "1.0.0",
-        "docs": "/docs"
-    }
+    return ok(
+        {
+            "name": settings.app_name,
+            "version": "2.0.0",
+            "docs": "/docs",
+            "health": "/health",
+        }
+    )
 
 
 @app.get("/health")
 async def health_check():
-    """健康检查"""
-    return {"status": "healthy"}
-
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    return ok({"status": "healthy", "database": settings.db_name})
