@@ -17,7 +17,9 @@
             :style="stickyStyle(column)"
           >
             <div class="app-table-head-cell">
-              <EllipsisText :value="column.label" />
+              <slot :name="`head-${column.key}`" :column="column">
+                <EllipsisText :value="column.label" />
+              </slot>
             </div>
           </th>
         </tr>

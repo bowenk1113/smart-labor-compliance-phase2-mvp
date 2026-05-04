@@ -5,11 +5,29 @@
         <div class="section-title">
           <h2>{{ t('sourceList') }}</h2>
           <div class="toolbar">
+            <button v-if="canExport" class="btn" @click="exportCurrentSources">{{ t('exportData') }}</button>
+            <button v-if="canExport" class="btn" :disabled="!selectedIds.length" @click="exportSelectedSources">{{ t('exportSelected') }}</button>
+            <label v-if="canImport" class="btn import-button">
+              {{ t('importData') }}
+              <input type="file" accept=".csv,text/csv" @change="handleImport" />
+            </label>
             <button class="btn primary" @click="openCreateModal">{{ t('addSource') }}</button>
             <button class="btn" @click="fetchSources">{{ t('refresh') }}</button>
           </div>
         </div>
+        <div v-if="canBatch" class="batch-toolbar">
+          <span class="muted">{{ selectedCountText }}</span>
+          <button class="btn primary" :disabled="!selectedIds.length" @click="batchMarkReviewed">{{ t('batchMarkReviewed') }}</button>
+          <button class="btn" :disabled="!selectedIds.length" @click="batchMarkPending">{{ t('batchMarkPending') }}</button>
+          <button class="btn danger" :disabled="!selectedIds.length" @click="batchDeleteSelected">{{ t('batchDelete') }}</button>
+        </div>
         <AppTable :columns="sourceColumns" :rows="sources" :empty-text="t('noSources')" :sequence-start="sequenceStart">
+          <template #head-select>
+            <input type="checkbox" :aria-label="t('selectAll')" :checked="allSelected" @change="toggleSelectAll" />
+          </template>
+          <template #cell-select="{ row }">
+            <input type="checkbox" :aria-label="t('selectRow')" :checked="selectedIds.includes(row.id)" @change="toggleSelected(row.id)" />
+          </template>
           <template #cell-title="{ row }">
             <a v-if="row.url" :href="row.url" target="_blank" rel="noreferrer">
               <EllipsisText :value="row.title" as-link />
@@ -185,7 +203,7 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { addSource, deleteSource, getSources, reviewSource, updateSource, uploadSourceFile } from '@/api'
+import { addSource, batchSources, deleteSource, exportSources, getSources, importSources, reviewSource, updateSource, uploadSourceFile } from '@/api'
 import { useI18n } from '@/i18n'
 import AppPagination from '@/components/AppPagination.vue'
 import AppSelect from '@/components/AppSelect.vue'
@@ -202,6 +220,8 @@ const editingId = ref(null)
 const sourceModalOpen = ref(false)
 const detailModalOpen = ref(false)
 const selectedSource = ref(null)
+const selectedIds = ref([])
+const permissions = JSON.parse(localStorage.getItem('admin_permissions') || '[]')
 const sourceMode = ref('link')
 const selectedFile = ref(null)
 const uploadedFileName = ref('')
@@ -236,7 +256,14 @@ const regionOptions = computed(() => withCurrentOption([
   '其他'
 ], form.value.region))
 const sequenceStart = computed(() => (page.value - 1) * pageSize.value + 1)
+const hasPermission = (permission, fallback) => permissions.includes(permission) || permissions.includes(fallback)
+const canImport = computed(() => hasPermission('sources_import', 'sources'))
+const canExport = computed(() => hasPermission('sources_export', 'sources'))
+const canBatch = computed(() => hasPermission('sources_batch', 'sources'))
+const allSelected = computed(() => sources.value.length > 0 && sources.value.every(item => selectedIds.value.includes(item.id)))
+const selectedCountText = computed(() => t('selectedCount').replace('{count}', selectedIds.value.length))
 const sourceColumns = computed(() => [
+  { key: 'select', label: '', width: '44px', align: 'center' },
   { key: 'sequence', label: t('sequence'), width: '64px' },
   { key: 'title', label: t('title'), width: '36%' },
   { key: 'doc_type', label: t('docType'), width: '120px' },
@@ -258,6 +285,7 @@ const fetchSources = async () => {
   const res = await getSources({ page: page.value, page_size: pageSize.value })
   sources.value = res.data?.list || []
   total.value = res.data?.total || 0
+  selectedIds.value = selectedIds.value.filter(id => sources.value.some(item => item.id === id))
 }
 const openCreateModal = () => {
   resetForm()
@@ -323,6 +351,48 @@ const toggleReview = async (item) => {
   await reviewSource(item.id, nextStatus)
   fetchSources()
 }
+const toggleSelected = (id) => {
+  selectedIds.value = selectedIds.value.includes(id)
+    ? selectedIds.value.filter(item => item !== id)
+    : [...selectedIds.value, id]
+}
+const toggleSelectAll = () => {
+  selectedIds.value = allSelected.value ? [] : sources.value.map(item => item.id)
+}
+const selectedExportParams = () => ({ ids: selectedIds.value.join(',') })
+const exportCurrentSources = () => exportSources({})
+const exportSelectedSources = () => {
+  if (!selectedIds.value.length) {
+    alert(t('noSelection'))
+    return
+  }
+  exportSources(selectedExportParams())
+}
+const handleImport = async (event) => {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  if (!file) return
+  const res = await importSources(file)
+  alert(`${t('importFinished')}：${res.data?.imported || 0}/${res.data?.updated || 0}/${res.data?.skipped || 0}`)
+  fetchSources()
+}
+const batchMarkReviewed = async () => {
+  if (!selectedIds.value.length) return alert(t('noSelection'))
+  await batchSources({ action: 'mark_reviewed', ids: selectedIds.value })
+  fetchSources()
+}
+const batchMarkPending = async () => {
+  if (!selectedIds.value.length) return alert(t('noSelection'))
+  await batchSources({ action: 'mark_pending', ids: selectedIds.value })
+  fetchSources()
+}
+const batchDeleteSelected = async () => {
+  if (!selectedIds.value.length) return alert(t('noSelection'))
+  if (!confirm(t('deleteSourceConfirm'))) return
+  await batchSources({ action: 'delete', ids: selectedIds.value })
+  selectedIds.value = []
+  fetchSources()
+}
 const resetForm = () => {
   editingId.value = null
   sourceMode.value = 'link'
@@ -369,6 +439,26 @@ onMounted(fetchSources)
 
 .source-detail-modal {
   width: min(860px, calc(100vw - 32px));
+}
+
+.batch-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: -2px 0 12px;
+}
+
+.import-button {
+  position: relative;
+  overflow: hidden;
+}
+
+.import-button input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
 }
 
 .source-detail {

@@ -7,10 +7,29 @@
           <div class="toolbar">
             <input v-model="keyword" class="input" style="width: 240px" :placeholder="t('searchQuestion')" />
             <button class="btn" @click="queryFaqs">{{ t('query') }}</button>
+            <button v-if="canExport" class="btn" @click="exportCurrentFaqs">{{ t('exportData') }}</button>
+            <button v-if="canExport" class="btn" :disabled="!selectedIds.length" @click="exportSelectedFaqs">{{ t('exportSelected') }}</button>
+            <label v-if="canImport" class="btn import-button">
+              {{ t('importData') }}
+              <input type="file" accept=".csv,text/csv" @change="handleImport" />
+            </label>
             <button class="btn primary" @click="openCreateModal">{{ t('addFaq') }}</button>
           </div>
         </div>
+        <div v-if="canBatch" class="batch-toolbar">
+          <span class="muted">{{ selectedCountText }}</span>
+          <button class="btn danger" :disabled="!selectedIds.length" @click="batchDeleteSelected">{{ t('batchDelete') }}</button>
+          <button class="btn" :disabled="!selectedIds.length" @click="batchSetRisk('high')">{{ t('batchRiskHigh') }}</button>
+          <button class="btn" :disabled="!selectedIds.length" @click="batchSetRisk('medium')">{{ t('batchRiskMedium') }}</button>
+          <button class="btn" :disabled="!selectedIds.length" @click="batchSetRisk('low')">{{ t('batchRiskLow') }}</button>
+        </div>
         <AppTable :columns="faqColumns" :rows="faqs" :empty-text="t('noFaqs')" :sequence-start="sequenceStart">
+          <template #head-select>
+            <input type="checkbox" :aria-label="t('selectAll')" :checked="allSelected" @change="toggleSelectAll" />
+          </template>
+          <template #cell-select="{ row }">
+            <input type="checkbox" :aria-label="t('selectRow')" :checked="selectedIds.includes(row.id)" @change="toggleSelected(row.id)" />
+          </template>
           <template #cell-risk_level="{ row }">
             <span :class="['tag', riskClass(row.risk_level)]">{{ riskLabel(row.risk_level) }}</span>
           </template>
@@ -52,7 +71,7 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { addFaq, deleteFaq, getFaqs, updateFaq } from '@/api'
+import { addFaq, batchFaqs, deleteFaq, exportFaqs, getFaqs, importFaqs, updateFaq } from '@/api'
 import { useI18n } from '@/i18n'
 import AppPagination from '@/components/AppPagination.vue'
 import AppSelect from '@/components/AppSelect.vue'
@@ -68,10 +87,19 @@ const keyword = ref('')
 const keywordText = ref('')
 const editingId = ref(null)
 const faqModalOpen = ref(false)
+const selectedIds = ref([])
+const permissions = JSON.parse(localStorage.getItem('admin_permissions') || '[]')
 const initialForm = () => ({ question: '', answer: '', category: '', region: t('defaultRegion'), risk_level: 'medium', keywords: [] })
 const form = ref(initialForm())
 const sequenceStart = computed(() => (page.value - 1) * pageSize.value + 1)
+const hasPermission = (permission, fallback) => permissions.includes(permission) || permissions.includes(fallback)
+const canImport = computed(() => hasPermission('faqs_import', 'faqs'))
+const canExport = computed(() => hasPermission('faqs_export', 'faqs'))
+const canBatch = computed(() => hasPermission('faqs_batch', 'faqs'))
+const allSelected = computed(() => faqs.value.length > 0 && faqs.value.every(item => selectedIds.value.includes(item.id)))
+const selectedCountText = computed(() => t('selectedCount').replace('{count}', selectedIds.value.length))
 const faqColumns = computed(() => [
+  { key: 'select', label: '', width: '44px', align: 'center' },
   { key: 'sequence', label: t('sequence'), width: '64px' },
   { key: 'question', label: t('question'), width: '30%' },
   { key: 'category', label: t('category'), width: '104px' },
@@ -89,6 +117,7 @@ const fetchFaqs = async () => {
   const res = await getFaqs({ keyword: keyword.value, page: page.value, page_size: pageSize.value })
   faqs.value = res.data?.list || []
   total.value = res.data?.total || 0
+  selectedIds.value = selectedIds.value.filter(id => faqs.value.some(item => item.id === id))
 }
 const queryFaqs = () => {
   page.value = 1
@@ -121,6 +150,43 @@ const removeFaq = async (id) => {
   await deleteFaq(id)
   fetchFaqs()
 }
+const toggleSelected = (id) => {
+  selectedIds.value = selectedIds.value.includes(id)
+    ? selectedIds.value.filter(item => item !== id)
+    : [...selectedIds.value, id]
+}
+const toggleSelectAll = () => {
+  selectedIds.value = allSelected.value ? [] : faqs.value.map(item => item.id)
+}
+const selectedExportParams = () => ({ ids: selectedIds.value.join(',') })
+const exportCurrentFaqs = () => exportFaqs({ keyword: keyword.value })
+const exportSelectedFaqs = () => {
+  if (!selectedIds.value.length) {
+    alert(t('noSelection'))
+    return
+  }
+  exportFaqs(selectedExportParams())
+}
+const handleImport = async (event) => {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  if (!file) return
+  const res = await importFaqs(file)
+  alert(`${t('importFinished')}：${res.data?.imported || 0}/${res.data?.updated || 0}/${res.data?.skipped || 0}`)
+  fetchFaqs()
+}
+const batchDeleteSelected = async () => {
+  if (!selectedIds.value.length) return alert(t('noSelection'))
+  if (!confirm(t('deleteFaqConfirm'))) return
+  await batchFaqs({ action: 'delete', ids: selectedIds.value })
+  selectedIds.value = []
+  fetchFaqs()
+}
+const batchSetRisk = async (riskLevel) => {
+  if (!selectedIds.value.length) return alert(t('noSelection'))
+  await batchFaqs({ action: 'set_risk', ids: selectedIds.value, risk_level: riskLevel })
+  fetchFaqs()
+}
 const resetForm = () => {
   editingId.value = null
   form.value = initialForm()
@@ -138,6 +204,26 @@ onMounted(fetchFaqs)
 
 .faq-answer {
   min-height: 130px;
+}
+
+.batch-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: -2px 0 12px;
+}
+
+.import-button {
+  position: relative;
+  overflow: hidden;
+}
+
+.import-button input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
 }
 
 .modal-actions {

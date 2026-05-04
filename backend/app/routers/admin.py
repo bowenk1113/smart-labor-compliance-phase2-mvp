@@ -1,12 +1,16 @@
 """管理端路由。"""
-from datetime import datetime, timedelta
+import csv
+import io
+import json
+from datetime import date, datetime, timedelta
 from difflib import SequenceMatcher
 from pathlib import Path
-from uuid import uuid4
 from typing import Optional
 from urllib.parse import urlparse
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from sqlalchemy import desc, func, or_
 from sqlalchemy.orm import Session
 
@@ -35,6 +39,85 @@ from app.services.dify_service import check_external_services
 router = APIRouter(prefix="/api/admin", tags=["管理端"])
 
 ALLOWED_SOURCE_FILE_EXTENSIONS = {".pdf", ".doc", ".docx", ".txt", ".md", ".html", ".htm", ".csv", ".xlsx", ".xls"}
+ALLOWED_IMPORT_FILE_EXTENSIONS = {".csv"}
+FAQ_EXPORT_FIELDS = ["id", "faq_code", "question", "answer", "category", "region", "risk_level", "keywords", "language", "effective_date"]
+SOURCE_EXPORT_FIELDS = ["id", "source_code", "title", "url", "doc_type", "issuer", "region", "validity_status", "review_status", "reviewed_at", "reviewed_by", "local_file", "description"]
+PACKAGE_EXPORT_FIELDS = ["id", "name", "region", "version", "description", "categories", "status", "dify_dataset_id", "ragflow_dataset_id"]
+
+
+def _require_permission(current_admin: dict, permission: str) -> None:
+    if permission not in current_admin.get("permissions", []):
+        raise HTTPException(status_code=403, detail="当前账号没有该操作权限")
+
+
+def _parse_ids(ids: Optional[str]) -> list[int]:
+    if not ids:
+        return []
+    parsed: list[int] = []
+    for raw in ids.split(","):
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            parsed.append(int(raw))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="无效的 ID 列表") from exc
+    return parsed
+
+
+def _read_json_list(value):
+    if value is None or value == "":
+        return None
+    if isinstance(value, list):
+        return value
+    try:
+        parsed = json.loads(value)
+        if isinstance(parsed, list):
+            return parsed
+    except (TypeError, json.JSONDecodeError):
+        pass
+    return [item.strip() for item in str(value).split("|") if item.strip()]
+
+
+def _csv_text_response(filename: str, rows: list[dict], fields: list[str]) -> StreamingResponse:
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        normalized = {}
+        for field in fields:
+            value = row.get(field)
+            if isinstance(value, (list, dict)):
+                value = json.dumps(value, ensure_ascii=False)
+            elif isinstance(value, datetime):
+                value = value.isoformat(sep=" ", timespec="seconds")
+            elif isinstance(value, date):
+                value = value.isoformat()
+            normalized[field] = "" if value is None else value
+        writer.writerow(normalized)
+    content = output.getvalue().encode("utf-8-sig")
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return StreamingResponse(io.BytesIO(content), media_type="text/csv; charset=utf-8", headers=headers)
+
+
+async def _read_import_rows(file: UploadFile) -> list[dict]:
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in ALLOWED_IMPORT_FILE_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="目前仅支持 CSV 文件导入")
+    content = await file.read()
+    await file.close()
+    if not content:
+        raise HTTPException(status_code=400, detail="导入文件为空")
+    text = content.decode("utf-8-sig")
+    return [dict(row) for row in csv.DictReader(io.StringIO(text)) if any((value or "").strip() for value in row.values())]
+
+
+def _module_query(db: Session, model, current_admin: dict, ids: Optional[str] = None, tenant_id: Optional[int] = None):
+    query = _tenant_scoped_query(db, model, current_admin, tenant_id)
+    parsed_ids = _parse_ids(ids)
+    if parsed_ids:
+        query = query.filter(model.id.in_(parsed_ids))
+    return query
 
 
 def _tenant_query(db: Session, current_admin: dict):
@@ -599,15 +682,123 @@ async def get_faqs(
     db: Session = Depends(get_db),
     current_admin: dict = Depends(get_current_admin),
 ):
+    _require_permission(current_admin, "faqs")
     page, page_size = normalize_pagination(page, page_size)
     query = _tenant_scoped_query(db, FAQ, current_admin, tenant_id)
     if category:
         query = query.filter(FAQ.category == category)
     if keyword:
-        query = query.filter(FAQ.question.contains(keyword))
+        query = query.filter(or_(FAQ.question.contains(keyword), FAQ.faq_code.contains(keyword)))
     total = query.count()
     items = query.order_by(FAQ.id.asc()).offset((page - 1) * page_size).limit(page_size).all()
     return page_response(items, total, page, page_size)
+
+
+@router.get("/faqs/export")
+async def export_faqs(
+    tenant_id: Optional[int] = None,
+    category: Optional[str] = None,
+    keyword: Optional[str] = None,
+    ids: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(get_current_admin),
+):
+    _require_permission(current_admin, "faqs_export")
+    query = _module_query(db, FAQ, current_admin, ids, tenant_id)
+    if category:
+        query = query.filter(FAQ.category == category)
+    if keyword:
+        query = query.filter(or_(FAQ.question.contains(keyword), FAQ.faq_code.contains(keyword)))
+    rows = [
+        {
+            "id": item.id,
+            "faq_code": item.faq_code,
+            "question": item.question,
+            "answer": item.answer,
+            "category": item.category,
+            "region": item.region,
+            "risk_level": item.risk_level,
+            "keywords": item.keywords or [],
+            "language": item.language,
+            "effective_date": item.effective_date,
+        }
+        for item in query.order_by(FAQ.id.asc()).all()
+    ]
+    return _csv_text_response("faqs.csv", rows, FAQ_EXPORT_FIELDS)
+
+
+@router.post("/faqs/import")
+async def import_faqs(
+    tenant_id: Optional[int] = None,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(get_current_admin),
+):
+    _require_permission(current_admin, "faqs_import")
+    allowed_tenant_id = get_admin_tenant_filter(current_admin, tenant_id)
+    rows = await _read_import_rows(file)
+    imported = 0
+    updated = 0
+    skipped = 0
+    errors: list[str] = []
+    for index, row in enumerate(rows, start=2):
+        question = sanitize_text(row.get("question") or row.get("问题"))
+        answer = sanitize_text(row.get("answer") or row.get("回答") or row.get("答案"))
+        if not question or not answer:
+            skipped += 1
+            errors.append(f"第 {index} 行缺少 question/answer")
+            continue
+        payload = {
+            "faq_code": row.get("faq_code") or row.get("编码") or None,
+            "question": question,
+            "answer": answer,
+            "category": row.get("category") or row.get("分类") or None,
+            "region": row.get("region") or row.get("地区") or "陕西",
+            "risk_level": row.get("risk_level") or row.get("风险等级") or "medium",
+            "keywords": _read_json_list(row.get("keywords") or row.get("关键词")),
+            "aliases": _read_json_list(row.get("aliases")),
+            "source_ids": _read_json_list(row.get("source_ids")),
+            "language": row.get("language") or "zh-CN",
+            "effective_date": row.get("effective_date") or None,
+        }
+        faq = _find_duplicate_faq(db, allowed_tenant_id, payload)
+        if faq:
+            for field, value in payload.items():
+                setattr(faq, field, value)
+            updated += 1
+        else:
+            db.add(FAQ(tenant_id=allowed_tenant_id, **payload))
+            imported += 1
+    db.commit()
+    return ok({"imported": imported, "updated": updated, "skipped": skipped, "errors": errors[:20]}, "FAQ 导入完成")
+
+
+@router.post("/faqs/batch")
+async def batch_faqs(
+    request: dict,
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(get_current_admin),
+):
+    _require_permission(current_admin, "faqs_batch")
+    ids = request.get("ids") or []
+    action = request.get("action")
+    if not ids:
+        raise HTTPException(status_code=400, detail="请选择要批量操作的数据")
+    query = _tenant_scoped_query(db, FAQ, current_admin).filter(FAQ.id.in_(ids))
+    items = query.all()
+    if action == "delete":
+        for item in items:
+            db.delete(item)
+    elif action == "set_risk":
+        risk_level = request.get("risk_level")
+        if risk_level not in {"low", "medium", "high"}:
+            raise HTTPException(status_code=400, detail="无效的风险等级")
+        for item in items:
+            item.risk_level = risk_level
+    else:
+        raise HTTPException(status_code=400, detail="不支持的批量操作")
+    db.commit()
+    return ok({"affected": len(items)}, "批量操作完成")
 
 
 @router.post("/faqs")
@@ -617,6 +808,7 @@ async def create_faq(
     db: Session = Depends(get_db),
     current_admin: dict = Depends(get_current_admin),
 ):
+    _require_permission(current_admin, "faqs")
     allowed_tenant_id = get_admin_tenant_filter(current_admin, tenant_id)
     payload = {
         "faq_code": request.faq_code,
@@ -652,6 +844,7 @@ async def update_faq(
     db: Session = Depends(get_db),
     current_admin: dict = Depends(get_current_admin),
 ):
+    _require_permission(current_admin, "faqs")
     faq = db.query(FAQ).filter(FAQ.id == faq_id).first()
     if not faq:
         raise HTTPException(status_code=404, detail="FAQ 不存在")
@@ -677,6 +870,7 @@ async def delete_faq(
     db: Session = Depends(get_db),
     current_admin: dict = Depends(get_current_admin),
 ):
+    _require_permission(current_admin, "faqs")
     faq = db.query(FAQ).filter(FAQ.id == faq_id).first()
     if not faq:
         raise HTTPException(status_code=404, detail="FAQ 不存在")
@@ -697,6 +891,7 @@ async def get_sources(
     db: Session = Depends(get_db),
     current_admin: dict = Depends(get_current_admin),
 ):
+    _require_permission(current_admin, "sources")
     page, page_size = normalize_pagination(page, page_size)
     query = _tenant_scoped_query(db, Source, current_admin, tenant_id)
     if doc_type:
@@ -704,10 +899,136 @@ async def get_sources(
     if region:
         query = query.filter(Source.region == region)
     if keyword:
-        query = query.filter(Source.title.contains(keyword))
+        query = query.filter(or_(Source.title.contains(keyword), Source.source_code.contains(keyword), Source.url.contains(keyword)))
     total = query.count()
     items = query.order_by(Source.id.asc()).offset((page - 1) * page_size).limit(page_size).all()
     return page_response(items, total, page, page_size)
+
+
+@router.get("/sources/export")
+async def export_sources(
+    tenant_id: Optional[int] = None,
+    doc_type: Optional[str] = None,
+    region: Optional[str] = None,
+    keyword: Optional[str] = None,
+    ids: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(get_current_admin),
+):
+    _require_permission(current_admin, "sources_export")
+    query = _module_query(db, Source, current_admin, ids, tenant_id)
+    if doc_type:
+        query = query.filter(Source.doc_type == doc_type)
+    if region:
+        query = query.filter(Source.region == region)
+    if keyword:
+        query = query.filter(or_(Source.title.contains(keyword), Source.source_code.contains(keyword), Source.url.contains(keyword)))
+    rows = [
+        {
+            "id": item.id,
+            "source_code": item.source_code,
+            "title": item.title,
+            "url": item.url,
+            "doc_type": item.doc_type,
+            "issuer": item.issuer,
+            "region": item.region,
+            "validity_status": item.validity_status,
+            "review_status": item.review_status,
+            "reviewed_at": item.reviewed_at,
+            "reviewed_by": item.reviewed_by,
+            "local_file": item.local_file,
+            "description": item.description,
+        }
+        for item in query.order_by(Source.id.asc()).all()
+    ]
+    return _csv_text_response("sources.csv", rows, SOURCE_EXPORT_FIELDS)
+
+
+@router.post("/sources/import")
+async def import_sources(
+    tenant_id: Optional[int] = None,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(get_current_admin),
+):
+    _require_permission(current_admin, "sources_import")
+    allowed_tenant_id = get_admin_tenant_filter(current_admin, tenant_id)
+    rows = await _read_import_rows(file)
+    imported = 0
+    updated = 0
+    skipped = 0
+    errors: list[str] = []
+    for index, row in enumerate(rows, start=2):
+        title = sanitize_text(row.get("title") or row.get("标题"))
+        url = (row.get("url") or row.get("链接") or "").strip()
+        local_file = (row.get("local_file") or row.get("本地文件") or "").strip()
+        if not title or (not url and not local_file):
+            skipped += 1
+            errors.append(f"第 {index} 行缺少 title 或来源路径")
+            continue
+        payload = {
+            "source_code": row.get("source_code") or row.get("编码") or None,
+            "title": title,
+            "url": url or None,
+            "doc_type": row.get("doc_type") or row.get("类型") or None,
+            "issuer": row.get("issuer") or row.get("发布机关") or "",
+            "region": row.get("region") or row.get("地区") or None,
+            "validity_status": row.get("validity_status") or "有效",
+            "review_status": row.get("review_status") or "待人工复核",
+            "owner": row.get("owner") or None,
+            "local_file": local_file or None,
+            "description": sanitize_text(row.get("description") or row.get("说明")),
+        }
+        if _is_source_reviewed(payload.get("review_status")):
+            payload["reviewed_at"] = datetime.utcnow()
+            payload["reviewed_by"] = _reviewer_name(current_admin)
+        source = _find_duplicate_source(db, allowed_tenant_id, payload)
+        if source:
+            if _is_source_reviewed(source.review_status):
+                skipped += 1
+                errors.append(f"第 {index} 行匹配到已复核来源，已跳过")
+                continue
+            for field, value in payload.items():
+                setattr(source, field, value)
+            updated += 1
+        else:
+            db.add(Source(tenant_id=allowed_tenant_id, **payload))
+            imported += 1
+    db.commit()
+    return ok({"imported": imported, "updated": updated, "skipped": skipped, "errors": errors[:20]}, "来源导入完成")
+
+
+@router.post("/sources/batch")
+async def batch_sources(
+    request: dict,
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(get_current_admin),
+):
+    _require_permission(current_admin, "sources_batch")
+    ids = request.get("ids") or []
+    action = request.get("action")
+    if not ids:
+        raise HTTPException(status_code=400, detail="请选择要批量操作的数据")
+    items = _tenant_scoped_query(db, Source, current_admin).filter(Source.id.in_(ids)).all()
+    if action == "delete":
+        for item in items:
+            if _is_source_reviewed(item.review_status):
+                raise HTTPException(status_code=400, detail="已复核的数据不支持批量删除")
+            db.delete(item)
+    elif action == "mark_reviewed":
+        for item in items:
+            item.review_status = "已复核"
+            item.reviewed_at = datetime.utcnow()
+            item.reviewed_by = _reviewer_name(current_admin)
+    elif action == "mark_pending":
+        for item in items:
+            item.review_status = "待人工复核"
+            item.reviewed_at = None
+            item.reviewed_by = None
+    else:
+        raise HTTPException(status_code=400, detail="不支持的批量操作")
+    db.commit()
+    return ok({"affected": len(items)}, "批量操作完成")
 
 
 @router.post("/sources")
@@ -717,6 +1038,7 @@ async def create_source(
     db: Session = Depends(get_db),
     current_admin: dict = Depends(get_current_admin),
 ):
+    _require_permission(current_admin, "sources")
     allowed_tenant_id = get_admin_tenant_filter(current_admin, tenant_id)
     payload = request.model_dump()
     payload["issuer"] = payload.get("issuer") or ""
@@ -748,6 +1070,7 @@ async def upload_source_file(
     file: UploadFile = File(...),
     current_admin: dict = Depends(get_current_admin),
 ):
+    _require_permission(current_admin, "sources")
     allowed_tenant_id = get_admin_tenant_filter(current_admin, tenant_id)
     if not allowed_tenant_id:
         raise HTTPException(status_code=400, detail="上传文件必须绑定租户")
@@ -789,6 +1112,7 @@ async def update_source(
     db: Session = Depends(get_db),
     current_admin: dict = Depends(get_current_admin),
 ):
+    _require_permission(current_admin, "sources")
     source = db.query(Source).filter(Source.id == source_id).first()
     if not source:
         raise HTTPException(status_code=404, detail="来源不存在")
@@ -831,6 +1155,7 @@ async def delete_source(
     db: Session = Depends(get_db),
     current_admin: dict = Depends(get_current_admin),
 ):
+    _require_permission(current_admin, "sources")
     source = db.query(Source).filter(Source.id == source_id).first()
     if not source:
         raise HTTPException(status_code=404, detail="来源不存在")
@@ -850,6 +1175,7 @@ async def get_knowledge_packages(
     db: Session = Depends(get_db),
     current_admin: dict = Depends(get_current_admin),
 ):
+    _require_permission(current_admin, "packages")
     page, page_size = normalize_pagination(page, page_size)
     query = _tenant_scoped_query(db, KnowledgePackage, current_admin, tenant_id)
     if region:
@@ -880,6 +1206,114 @@ async def get_knowledge_packages(
     return page_response(data, total, page, page_size)
 
 
+@router.get("/knowledge-packages/export")
+async def export_knowledge_packages(
+    tenant_id: Optional[int] = None,
+    region: Optional[str] = None,
+    status: Optional[str] = None,
+    ids: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(get_current_admin),
+):
+    _require_permission(current_admin, "packages_export")
+    query = _module_query(db, KnowledgePackage, current_admin, ids, tenant_id)
+    if region:
+        query = query.filter(KnowledgePackage.region == region)
+    if status:
+        query = query.filter(KnowledgePackage.status == status)
+    rows = [
+        {
+            "id": item.id,
+            "name": item.name,
+            "region": item.region,
+            "version": item.version,
+            "description": item.description,
+            "categories": item.categories or [],
+            "status": item.status,
+            "dify_dataset_id": item.dify_dataset_id,
+            "ragflow_dataset_id": item.ragflow_dataset_id,
+        }
+        for item in query.order_by(KnowledgePackage.id.asc()).all()
+    ]
+    return _csv_text_response("knowledge-packages.csv", rows, PACKAGE_EXPORT_FIELDS)
+
+
+@router.post("/knowledge-packages/import")
+async def import_knowledge_packages(
+    tenant_id: Optional[int] = None,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(get_current_admin),
+):
+    _require_permission(current_admin, "packages_import")
+    allowed_tenant_id = get_admin_tenant_filter(current_admin, tenant_id)
+    rows = await _read_import_rows(file)
+    imported = 0
+    updated = 0
+    skipped = 0
+    errors: list[str] = []
+    for index, row in enumerate(rows, start=2):
+        name = sanitize_text(row.get("name") or row.get("名称"))
+        if not name:
+            skipped += 1
+            errors.append(f"第 {index} 行缺少 name")
+            continue
+        payload = {
+            "name": name,
+            "region": row.get("region") or row.get("地区") or None,
+            "version": row.get("version") or row.get("版本") or "v1.0",
+            "description": sanitize_text(row.get("description") or row.get("说明")),
+            "categories": _read_json_list(row.get("categories") or row.get("分类")),
+            "status": row.get("status") or row.get("状态") or "active",
+            "dify_dataset_id": row.get("dify_dataset_id") or None,
+            "ragflow_dataset_id": row.get("ragflow_dataset_id") or None,
+        }
+        if payload["status"] not in {"active", "disabled", "draft"}:
+            payload["status"] = "active"
+        package = (
+            db.query(KnowledgePackage)
+            .filter(KnowledgePackage.tenant_id == allowed_tenant_id, KnowledgePackage.name == payload["name"])
+            .order_by(KnowledgePackage.id.asc())
+            .first()
+        )
+        if package:
+            for field, value in payload.items():
+                setattr(package, field, value)
+            updated += 1
+        else:
+            db.add(KnowledgePackage(tenant_id=allowed_tenant_id, **payload))
+            imported += 1
+    db.commit()
+    return ok({"imported": imported, "updated": updated, "skipped": skipped, "errors": errors[:20]}, "知识包导入完成")
+
+
+@router.post("/knowledge-packages/batch")
+async def batch_knowledge_packages(
+    request: dict,
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(get_current_admin),
+):
+    _require_permission(current_admin, "packages_batch")
+    ids = request.get("ids") or []
+    action = request.get("action")
+    if not ids:
+        raise HTTPException(status_code=400, detail="请选择要批量操作的数据")
+    items = _tenant_scoped_query(db, KnowledgePackage, current_admin).filter(KnowledgePackage.id.in_(ids)).all()
+    if action == "delete":
+        for item in items:
+            db.delete(item)
+    elif action == "set_status":
+        status = request.get("status")
+        if status not in {"active", "disabled", "draft"}:
+            raise HTTPException(status_code=400, detail="无效的状态")
+        for item in items:
+            item.status = status
+    else:
+        raise HTTPException(status_code=400, detail="不支持的批量操作")
+    db.commit()
+    return ok({"affected": len(items)}, "批量操作完成")
+
+
 @router.put("/knowledge-packages/{package_id}/status")
 async def update_package_status(
     package_id: int,
@@ -887,6 +1321,7 @@ async def update_package_status(
     db: Session = Depends(get_db),
     current_admin: dict = Depends(get_current_admin),
 ):
+    _require_permission(current_admin, "packages")
     package = db.query(KnowledgePackage).filter(KnowledgePackage.id == package_id).first()
     if not package:
         raise HTTPException(status_code=404, detail="知识包不存在")
@@ -908,6 +1343,7 @@ async def get_test_questions(
     db: Session = Depends(get_db),
     current_admin: dict = Depends(get_current_admin),
 ):
+    _require_permission(current_admin, "test_questions")
     page, page_size = normalize_pagination(page, page_size)
     query = _tenant_scoped_query(db, TestQuestion, current_admin, tenant_id)
     if category:

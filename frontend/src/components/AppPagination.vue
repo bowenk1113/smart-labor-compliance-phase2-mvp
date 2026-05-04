@@ -1,6 +1,7 @@
 <template>
   <div v-if="total > 0" class="pagination">
     <div class="pagination-size">
+      <span class="pagination-total">{{ totalText }}</span>
       <span class="pagination-label">{{ t('pageSize') }}</span>
       <AppSelect
         class="pagination-select"
@@ -45,6 +46,7 @@ const emit = defineEmits(['update:page', 'update:pageSize', 'change'])
 const { t } = useI18n()
 
 const totalPages = computed(() => Math.max(1, Math.ceil((props.total || 0) / Math.max(1, props.pageSize))))
+const totalText = computed(() => t('paginationTotal').replace('{total}', props.total || 0))
 const normalizedPageSizeOptions = computed(() => props.pageSizeOptions.map(value => ({
   value,
   label: `${value} ${t('itemsPerPage')}`

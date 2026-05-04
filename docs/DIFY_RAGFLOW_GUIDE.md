@@ -73,5 +73,6 @@
 - Dify API：`http://127.0.0.1/v1`
 - RAGFlow Web：`http://127.0.0.1:8880/`
 - RAGFlow API：`http://127.0.0.1:9380`
+- Dify 容器内访问 RAGFlow 外部知识库 API：`http://host.docker.internal:8880/api/v1/dify`
 
 如果 Dify API Key 为空，后端会自动走本地 FAQ 兜底。

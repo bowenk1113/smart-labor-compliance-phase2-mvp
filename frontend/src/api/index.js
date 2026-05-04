@@ -47,8 +47,42 @@ api.interceptors.response.use(
 export const unwrapList = (res) => res?.data?.list || res?.data || []
 export const unwrapData = (res) => res?.data
 
-export const chat = (data) => api.post('/chat', data)
+const downloadBlob = (blob, filename) => {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
+const uploadCsv = (url, file, params = {}) => {
+  const formData = new FormData()
+  formData.append('file', file)
+  return api.post(url, formData, { params })
+}
+
+const exportCsv = async (url, params = {}, filename = 'export.csv') => {
+  const res = await api.get(url, { params, responseType: 'blob' })
+  downloadBlob(res, filename)
+}
+
+export const chat = (data, config = {}) => api.post('/chat', data, config)
+export const chatWithFile = (data, file, config = {}) => {
+  const formData = new FormData()
+  Object.entries(data).forEach(([key, value]) => {
+    if (value !== undefined && value !== null) {
+      formData.append(key, value)
+    }
+  })
+  formData.append('file', file)
+  return api.post('/chat-with-file', formData, config)
+}
+export const stopChatGeneration = (data) => api.post('/chat/stop', data)
 export const getHistory = (params) => api.get('/history', { params })
+export const exportHistory = (params = {}) => exportCsv('/history/export', params, 'history.csv')
 export const clearHistory = (userId) => api.delete('/history', { params: { user_id: userId } })
 export const submitFeedback = (data) => api.post('/feedback', data)
 export const getRecommendedQuestions = () => api.get('/recommended-questions')
@@ -73,6 +107,9 @@ export const getFaqs = (params) => api.get('/admin/faqs', { params })
 export const addFaq = (data, params = {}) => api.post('/admin/faqs', data, { params })
 export const updateFaq = (id, data) => api.put(`/admin/faqs/${id}`, data)
 export const deleteFaq = (id) => api.delete(`/admin/faqs/${id}`)
+export const importFaqs = (file, params = {}) => uploadCsv('/admin/faqs/import', file, params)
+export const exportFaqs = (params = {}) => exportCsv('/admin/faqs/export', params, 'faqs.csv')
+export const batchFaqs = (data) => api.post('/admin/faqs/batch', data)
 
 export const getSources = (params) => api.get('/admin/sources', { params })
 export const addSource = (data, params = {}) => api.post('/admin/sources', data, { params })
@@ -84,9 +121,15 @@ export const uploadSourceFile = (file, params = {}) => {
   return api.post('/admin/sources/upload', formData, { params })
 }
 export const deleteSource = (id) => api.delete(`/admin/sources/${id}`)
+export const importSources = (file, params = {}) => uploadCsv('/admin/sources/import', file, params)
+export const exportSources = (params = {}) => exportCsv('/admin/sources/export', params, 'sources.csv')
+export const batchSources = (data) => api.post('/admin/sources/batch', data)
 
 export const getKnowledgePackages = (params) => api.get('/admin/knowledge-packages', { params })
 export const updatePackageStatus = (id, data) => api.put(`/admin/knowledge-packages/${id}/status`, data)
+export const importKnowledgePackages = (file, params = {}) => uploadCsv('/admin/knowledge-packages/import', file, params)
+export const exportKnowledgePackages = (params = {}) => exportCsv('/admin/knowledge-packages/export', params, 'knowledge-packages.csv')
+export const batchKnowledgePackages = (data) => api.post('/admin/knowledge-packages/batch', data)
 
 export const getTestQuestions = (params) => api.get('/admin/test-questions', { params })
 

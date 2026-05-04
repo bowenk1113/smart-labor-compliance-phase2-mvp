@@ -7,11 +7,23 @@ from datetime import datetime
 class ChatRequest(BaseModel):
     """问答请求"""
     question: str = Field(min_length=1, max_length=3000)
+    generation_id: Optional[str] = None
     session_id: Optional[str] = None
     user_id: Optional[str] = None
     tenant_code: Optional[str] = None
     language: str = "zh-CN"
     conversation_id: Optional[str] = None
+    user_role: str = "employee"
+    province: str = "陕西省"
+    city: str = "西安市"
+
+
+class ChatStopRequest(BaseModel):
+    """停止生成请求"""
+
+    generation_id: str = Field(min_length=1, max_length=120)
+    user_id: Optional[str] = None
+    tenant_code: Optional[str] = None
 
 
 class SourceInfo(BaseModel):
@@ -46,9 +58,16 @@ class HistoryItem(BaseModel):
     """历史记录项"""
     id: int
     tenant_id: int
+    user_id: Optional[str] = None
+    session_id: Optional[str] = None
+    conversation_id: Optional[str] = None
+    language: str = "zh-CN"
     question: str
-    answer: str
+    answer: Optional[str] = None
+    sources: Optional[List[dict]] = None
+    related_tasks: Optional[List[dict]] = None
     provider: str
+    risk_level: str = "medium"
     response_time: Optional[int]
     status: str
     created_at: datetime
@@ -60,4 +79,6 @@ class HistoryItem(BaseModel):
 class HistoryResponse(BaseModel):
     """历史记录响应"""
     total: int
+    page: int = 1
+    page_size: int = 20
     list: List[HistoryItem]

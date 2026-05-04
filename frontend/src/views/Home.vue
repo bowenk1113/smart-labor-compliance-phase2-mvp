@@ -19,15 +19,33 @@
             v-model="question"
             class="textarea"
             :placeholder="t('askPlaceholder')"
+            :disabled="loading"
             @keydown.ctrl.enter="submitQuestion"
           />
+          <div class="file-strip">
+            <input ref="fileInput" type="file" class="sr-only" @change="handleFileChange" />
+            <button class="btn" type="button" :disabled="loading" @click="openFilePicker">
+              {{ t('attachFile') }}
+            </button>
+            <div v-if="attachedFile" class="file-pill">
+              <span>{{ attachedFile.name }}</span>
+              <button type="button" :aria-label="t('removeFile')" :disabled="loading" @click="removeFile">×</button>
+            </div>
+            <span v-else class="muted">{{ t('chatFileHint') }}</span>
+          </div>
           <div class="split-actions" style="margin-top: 12px">
             <div class="toolbar">
-              <input v-model="tenantCode" class="input" style="width: 150px" :placeholder="t('tenantCode')" @change="persistTenant" />
+              <input v-model="tenantCode" class="input" style="width: 150px" :placeholder="t('tenantCode')" :disabled="loading" @change="persistTenant" />
+              <AppSelect class="context-select role-select" v-model="userRole" :options="userRoleOptions" :disabled="loading" />
+              <AppSelect class="context-select region-select" v-model="province" :options="provinceOptions" :disabled="loading" @change="handleProvinceChange" />
+              <AppSelect class="context-select region-select" v-model="city" :options="cityOptions" :disabled="loading" />
               <span class="muted">Ctrl + Enter</span>
             </div>
-            <button class="btn primary" :disabled="loading || !question.trim()" @click="submitQuestion">
-              {{ loading ? t('answering') : t('ask') }}
+            <button v-if="loading" class="btn danger" type="button" @click="stopGeneration">
+              {{ t('stopGenerating') }}
+            </button>
+            <button v-else class="btn primary" :disabled="!question.trim()" @click="submitQuestion">
+              {{ t('ask') }}
             </button>
           </div>
 
@@ -64,7 +82,7 @@
             <div v-if="suggestions.length" class="subsection">
               <h3>{{ t('followUp') }}</h3>
               <div class="toolbar">
-                <button v-for="item in suggestions" :key="item" class="chip" @click="fillQuestion(item)">{{ item }}</button>
+              <button v-for="item in suggestions" :key="item" class="chip" :disabled="loading" @click="fillQuestion(item)">{{ item }}</button>
               </div>
             </div>
 
@@ -87,10 +105,10 @@
             <div class="card">
             <div class="section-title">
               <h2>{{ t('recommendedQuestions') }}</h2>
-              <button class="btn" @click="loadRecommended">{{ t('refresh') }}</button>
+              <button class="btn" :disabled="loading" @click="loadRecommended">{{ t('refresh') }}</button>
             </div>
             <div class="recommend-list">
-              <button v-for="item in recommended" :key="item.id || item.question" class="recommend-item" @click="fillQuestion(item.question)">
+              <button v-for="item in recommended" :key="item.id || item.question" class="recommend-item" :disabled="loading" @click="fillQuestion(item.question)">
                 <strong>{{ item.question }}</strong>
                 <span>{{ item.category }} · {{ riskLabel(item.risk_level) }}</span>
               </button>
@@ -109,14 +127,18 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import { chat, getRecommendedQuestions, getTenantCode, getTenantPublic, setTenantCode, submitFeedback } from '@/api'
+import { chat, chatWithFile, getRecommendedQuestions, getTenantCode, getTenantPublic, setTenantCode, stopChatGeneration, submitFeedback } from '@/api'
 import { useI18n } from '@/i18n'
+import AppSelect from '@/components/AppSelect.vue'
 import AppTopbar from '@/components/AppTopbar.vue'
 
 const { t, locale, riskLabel } = useI18n()
 const tenantCode = ref(getTenantCode())
 const tenant = ref({})
 const question = ref('')
+const userRole = ref(localStorage.getItem('chat_user_role') || 'employee')
+const province = ref(localStorage.getItem('chat_province') || '陕西省')
+const city = ref(localStorage.getItem('chat_city') || '西安市')
 const answer = ref('')
 const sources = ref([])
 const tasks = ref([])
@@ -130,9 +152,57 @@ const feedbackSubmitted = ref(false)
 const showRemark = ref(false)
 const feedbackRemark = ref('')
 const answeredQuestion = ref('')
+const attachedFile = ref(null)
+const fileInput = ref(null)
+const activeGenerationId = ref('')
+const requestController = ref(null)
+const stopping = ref(false)
+const LAST_CHAT_KEY = 'chat_last_state'
 
 const riskText = computed(() => riskLabel(riskLevel.value))
 const riskClass = computed(() => riskLevel.value === 'high' ? 'danger' : riskLevel.value === 'medium' ? 'warning' : 'success')
+const userRoleOptions = computed(() => [
+  { value: 'enterprise_hr', label: t('roleEnterpriseHr') },
+  { value: 'administrator_staff', label: t('roleAdministrativeStaff') },
+  { value: 'legal_staff', label: t('roleLegalStaff') },
+  { value: 'employee', label: t('roleEmployee') },
+  { value: 'admin_user', label: t('roleAdminUser') }
+])
+const regionTree = {
+  '北京市': ['北京市'],
+  '天津市': ['天津市'],
+  '河北省': ['石家庄市', '唐山市', '保定市', '邯郸市'],
+  '山西省': ['太原市', '大同市', '临汾市', '运城市'],
+  '内蒙古自治区': ['呼和浩特市', '包头市', '鄂尔多斯市'],
+  '辽宁省': ['沈阳市', '大连市', '鞍山市'],
+  '吉林省': ['长春市', '吉林市'],
+  '黑龙江省': ['哈尔滨市', '齐齐哈尔市'],
+  '上海市': ['上海市'],
+  '江苏省': ['南京市', '苏州市', '无锡市', '常州市'],
+  '浙江省': ['杭州市', '宁波市', '温州市', '绍兴市'],
+  '安徽省': ['合肥市', '芜湖市', '蚌埠市'],
+  '福建省': ['福州市', '厦门市', '泉州市'],
+  '江西省': ['南昌市', '九江市', '赣州市'],
+  '山东省': ['济南市', '青岛市', '烟台市', '潍坊市'],
+  '河南省': ['郑州市', '洛阳市', '开封市'],
+  '湖北省': ['武汉市', '宜昌市', '襄阳市'],
+  '湖南省': ['长沙市', '株洲市', '岳阳市'],
+  '广东省': ['广州市', '深圳市', '佛山市', '东莞市'],
+  '广西壮族自治区': ['南宁市', '柳州市', '桂林市'],
+  '海南省': ['海口市', '三亚市'],
+  '重庆市': ['重庆市'],
+  '四川省': ['成都市', '绵阳市', '德阳市'],
+  '贵州省': ['贵阳市', '遵义市'],
+  '云南省': ['昆明市', '曲靖市'],
+  '西藏自治区': ['拉萨市'],
+  '陕西省': ['西安市', '咸阳市', '宝鸡市', '渭南市', '延安市', '汉中市', '榆林市'],
+  '甘肃省': ['兰州市', '天水市'],
+  '青海省': ['西宁市'],
+  '宁夏回族自治区': ['银川市'],
+  '新疆维吾尔自治区': ['乌鲁木齐市']
+}
+const provinceOptions = computed(() => Object.keys(regionTree))
+const cityOptions = computed(() => regionTree[province.value] || [])
 
 const clearAnswer = () => {
   answer.value = ''
@@ -147,10 +217,48 @@ const clearAnswer = () => {
   feedbackRemark.value = ''
 }
 
+const saveLastChat = () => {
+  if (!answer.value) return
+  localStorage.setItem(LAST_CHAT_KEY, JSON.stringify({
+    question: answeredQuestion.value || question.value,
+    answer: answer.value,
+    sources: sources.value,
+    tasks: tasks.value,
+    suggestions: suggestions.value,
+    provider: provider.value,
+    riskLevel: riskLevel.value,
+    questionId: questionId.value
+  }))
+}
+
+const restoreLastChat = () => {
+  try {
+    const raw = localStorage.getItem(LAST_CHAT_KEY)
+    if (!raw) return
+    const data = JSON.parse(raw)
+    question.value = data.question || ''
+    answeredQuestion.value = data.question || ''
+    answer.value = data.answer || ''
+    sources.value = data.sources || []
+    tasks.value = data.tasks || []
+    suggestions.value = data.suggestions || []
+    provider.value = data.provider || ''
+    riskLevel.value = data.riskLevel || 'medium'
+    questionId.value = data.questionId || null
+  } catch (error) {
+    localStorage.removeItem(LAST_CHAT_KEY)
+  }
+}
+
 const persistTenant = () => {
   setTenantCode(tenantCode.value)
   loadTenant()
   loadRecommended()
+}
+
+const handleProvinceChange = (value) => {
+  const cities = regionTree[value] || []
+  city.value = cities[0] || ''
 }
 
 const loadTenant = async () => {
@@ -175,23 +283,49 @@ const loadRecommended = async () => {
 }
 
 const fillQuestion = (value) => {
+  if (loading.value) return
   question.value = value
+}
+
+const openFilePicker = () => {
+  fileInput.value?.click()
+}
+
+const handleFileChange = (event) => {
+  attachedFile.value = event.target.files?.[0] || null
+}
+
+const removeFile = () => {
+  attachedFile.value = null
+  if (fileInput.value) {
+    fileInput.value.value = ''
+  }
 }
 
 const submitQuestion = async () => {
   if (!question.value.trim() || loading.value) return
   const submittedQuestion = question.value
+  const generationId = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  clearAnswer()
+  answeredQuestion.value = ''
+  activeGenerationId.value = generationId
+  requestController.value = new AbortController()
+  stopping.value = false
   loading.value = true
-  feedbackSubmitted.value = false
-  showRemark.value = false
-  feedbackRemark.value = ''
   try {
-    const res = await chat({
+    const payload = {
       question: question.value,
+      generation_id: generationId,
       user_id: localStorage.getItem('user_id') || 'demo-user',
       tenant_code: tenantCode.value,
-      language: locale.value
-    })
+      language: locale.value,
+      user_role: userRole.value,
+      province: province.value,
+      city: city.value
+    }
+    const res = attachedFile.value
+      ? await chatWithFile(payload, attachedFile.value, { signal: requestController.value.signal })
+      : await chat(payload, { signal: requestController.value.signal })
     const data = res.data || {}
     answer.value = data.answer || ''
     sources.value = data.sources || []
@@ -201,13 +335,43 @@ const submitQuestion = async () => {
     riskLevel.value = data.risk_level || 'medium'
     questionId.value = data.question_id
     answeredQuestion.value = submittedQuestion
+    saveLastChat()
   } catch (error) {
-    answer.value = error.response?.data?.message || t('systemError')
+    answer.value = stopping.value || error.name === 'CanceledError' || error.code === 'ERR_CANCELED'
+      ? t('generationStopped')
+      : error.response?.data?.message || t('systemError')
     sources.value = []
     tasks.value = []
     answeredQuestion.value = submittedQuestion
   } finally {
     loading.value = false
+    activeGenerationId.value = ''
+    requestController.value = null
+    stopping.value = false
+  }
+}
+
+const stopGeneration = async () => {
+  if (!loading.value) return
+  stopping.value = true
+  const generationId = activeGenerationId.value
+  requestController.value?.abort()
+  loading.value = false
+  answer.value = t('generationStopped')
+  sources.value = []
+  tasks.value = []
+  suggestions.value = []
+  provider.value = ''
+  if (generationId) {
+    try {
+      await stopChatGeneration({
+        generation_id: generationId,
+        tenant_code: tenantCode.value,
+        user_id: localStorage.getItem('user_id') || 'demo-user'
+      })
+    } catch (error) {
+      // The local request has already been cancelled; backend stop is best effort.
+    }
   }
 }
 
@@ -225,6 +389,7 @@ const sendFeedback = async (isHelpful) => {
 }
 
 onMounted(() => {
+  restoreLastChat()
   loadTenant()
   loadRecommended()
 })
@@ -236,9 +401,90 @@ watch(question, (value) => {
     answeredQuestion.value = ''
   }
 })
+
+watch(userRole, (value) => {
+  localStorage.setItem('chat_user_role', value)
+})
+
+watch(province, (value) => {
+  localStorage.setItem('chat_province', value)
+})
+
+watch(city, (value) => {
+  localStorage.setItem('chat_city', value)
+})
 </script>
 
 <style scoped>
+.context-select {
+  width: 132px;
+}
+
+.role-select {
+  width: 150px;
+}
+
+.region-select {
+  width: 124px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.file-strip {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.file-pill {
+  min-height: 34px;
+  max-width: min(100%, 420px);
+  padding: 6px 8px 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.file-pill span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-pill button {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.file-pill button:hover {
+  color: var(--danger);
+  background: rgba(201, 54, 54, 0.08);
+}
+
 .answer-block {
   margin-top: 18px;
   border-top: 1px solid var(--line);
@@ -274,6 +520,11 @@ watch(question, (value) => {
   text-decoration: none;
   cursor: pointer;
   color: var(--text);
+}
+
+.recommend-item:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
 }
 
 .source-item span,

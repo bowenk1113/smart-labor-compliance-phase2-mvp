@@ -31,7 +31,8 @@ class RequestGuardMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         content_length = request.headers.get("content-length")
-        limit = settings.max_upload_bytes if request.url.path.endswith("/sources/upload") else settings.max_request_bytes
+        upload_paths = ("/sources/upload", "/chat-with-file")
+        limit = settings.max_upload_bytes if request.url.path.endswith(upload_paths) else settings.max_request_bytes
         if content_length and int(content_length) > limit:
             return JSONResponse(status_code=413, content={"detail": "请求体过大"})
 

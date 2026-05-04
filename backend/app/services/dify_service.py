@@ -1,24 +1,52 @@
 """Dify 与本地 FAQ 的统一问答服务。"""
 from __future__ import annotations
 
+import json
+import logging
+import threading
 import time
+from dataclasses import dataclass
 from difflib import SequenceMatcher
-from typing import Optional
+from pathlib import Path
+from typing import BinaryIO, Optional
 
 import requests
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.database import settings
-from app.models import FAQ, Source, Tenant
+from app.models import FAQ, KnowledgePackage, Source, Tenant
 from app.schemas.chat import ChatResponse, SourceInfo, TaskInfo
 from app.security import sanitize_text
 
+
+logger = logging.getLogger(__name__)
 
 DISCLAIMER = (
     "本回答用于企业合规辅助和演示，不替代正式法律意见。涉及具体待遇、金额、期限或争议处理时，"
     "请以当地人社、医保、税务等官方经办口径及企业制度最终复核为准。"
 )
+
+USER_ROLE_LABELS = {
+    "enterprise_hr": "企业HR",
+    "administrator_staff": "行政人员",
+    "legal_staff": "法务人员",
+    "employee": "员工",
+    "admin_user": "管理员",
+}
+
+
+_generation_tasks: dict[str, dict[str, str]] = {}
+_generation_tasks_lock = threading.Lock()
+
+
+@dataclass
+class ChatAttachment:
+    """待转交给 Dify 的用户附件。"""
+
+    filename: str
+    content_type: str
+    file: BinaryIO
 
 
 class ComplianceAnswerService:
@@ -34,18 +62,64 @@ class ComplianceAnswerService:
         user_id: Optional[str] = None,
         conversation_id: Optional[str] = None,
         language: str = "zh-CN",
+        user_role: str = "employee",
+        province: str = "陕西省",
+        city: str = "西安市",
+        attachment: Optional[ChatAttachment] = None,
+        generation_id: Optional[str] = None,
     ) -> ChatResponse:
         question = sanitize_text(question) or ""
         start_time = int(time.time() * 1000)
+        if not self._has_active_package():
+            response = ChatResponse(
+                answer=self._with_context_prefix(self._inactive_package_answer(question), user_role, province, city),
+                sources=None,
+                related_tasks=[],
+                response_time=int(time.time() * 1000) - start_time,
+                provider="knowledge_package_disabled",
+                risk_level=self._estimate_risk(question),
+                suggestions=[],
+                disclaimer=DISCLAIMER,
+            )
+            return response
 
         dify_key = self.tenant.dify_api_key or settings.dify_api_key
         if dify_key:
-            dify_response = self._call_dify(question, dify_key, user_id, conversation_id)
+            dify_response = self._call_dify(
+                question,
+                dify_key,
+                user_id,
+                conversation_id,
+                user_role,
+                province,
+                city,
+                attachment,
+                generation_id,
+            )
             if dify_response:
                 dify_response.response_time = int(time.time() * 1000) - start_time
                 return dify_response
 
+        if attachment:
+            return ChatResponse(
+                answer=self._with_context_prefix(
+                    "已收到附件，但文件内容解析必须由 Dify 完成。当前 Dify 未配置或调用失败，"
+                    "系统未对附件内容进行本地解析，请检查 Dify 应用密钥、文件上传能力和工作流配置后重试。",
+                    user_role,
+                    province,
+                    city,
+                ),
+                sources=None,
+                related_tasks=[],
+                response_time=int(time.time() * 1000) - start_time,
+                provider="dify_unavailable",
+                risk_level=self._estimate_risk(question),
+                suggestions=[],
+                disclaimer=DISCLAIMER,
+            )
+
         local_response = self._answer_from_faq(question, language)
+        local_response.answer = self._with_context_prefix(local_response.answer, user_role, province, city)
         local_response.response_time = int(time.time() * 1000) - start_time
         return local_response
 
@@ -55,32 +129,62 @@ class ComplianceAnswerService:
         api_key: str,
         user_id: Optional[str],
         conversation_id: Optional[str],
+        user_role: str,
+        province: str,
+        city: str,
+        attachment: Optional[ChatAttachment] = None,
+        generation_id: Optional[str] = None,
     ) -> Optional[ChatResponse]:
         try:
+            region = f"{province}{city}" if province and city else (province or city or self.tenant.region)
             payload = {
                 "query": question,
                 "user": user_id or "anonymous",
-                "response_mode": "blocking",
+                "response_mode": "streaming",
                 "inputs": {
                     "tenant_code": self.tenant.code,
                     "tenant_name": self.tenant.name,
-                    "region": self.tenant.region,
+                    "region": region,
+                    "province": province,
+                    "city": city,
+                    "user_role": USER_ROLE_LABELS.get(user_role, user_role),
                     "answer_style": "结构清晰、结论先行、引用来源、明确风险等级和待核验项",
                 },
             }
             if conversation_id:
                 payload["conversation_id"] = conversation_id
+            if attachment:
+                upload_file_id = self._upload_file_to_dify(api_key, user_id, attachment)
+                if not upload_file_id:
+                    logger.warning("Dify file upload failed; falling back to local FAQ. filename=%s", attachment.filename)
+                    return None
+                payload["files"] = [
+                    {
+                        "type": self._dify_file_type(attachment.filename, attachment.content_type),
+                        "transfer_method": "local_file",
+                        "upload_file_id": upload_file_id,
+                    }
+                ]
 
             response = requests.post(
                 f"{settings.dify_base_url.rstrip('/')}/chat-messages",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json=payload,
+                stream=True,
                 timeout=settings.dify_timeout_seconds,
             )
             if response.status_code != 200:
+                logger.warning(
+                    "Dify chat request failed; falling back to local FAQ. status=%s body=%s",
+                    response.status_code,
+                    response.text[:1000],
+                )
                 return None
 
-            data = response.json()
+            data = self._consume_dify_stream(response, generation_id, api_key, user_id or "anonymous")
+            if not data:
+                return None
+
             metadata = data.get("metadata") or {}
             sources = []
             for resource in metadata.get("retriever_resources", []):
@@ -97,13 +201,173 @@ class ComplianceAnswerService:
                 related_tasks=self._extract_tasks(question),
                 response_time=0,
                 conversation_id=data.get("conversation_id"),
+                question_id=None,
                 provider="dify",
                 risk_level=self._estimate_risk(question),
                 suggestions=self._suggestions(question),
                 disclaimer=DISCLAIMER,
             )
-        except requests.RequestException:
+        except requests.Timeout as exc:
+            logger.warning(
+                "Dify chat request timed out after %ss; falling back to local FAQ. url=%s error=%s",
+                settings.dify_timeout_seconds,
+                f"{settings.dify_base_url.rstrip('/')}/chat-messages",
+                exc,
+            )
             return None
+        except requests.RequestException as exc:
+            logger.warning("Dify chat request failed; falling back to local FAQ. error=%s", exc)
+            return None
+        finally:
+            if generation_id:
+                self._unregister_generation(generation_id)
+
+    def _consume_dify_stream(
+        self,
+        response: requests.Response,
+        generation_id: Optional[str],
+        api_key: str,
+        user_id: str,
+    ) -> Optional[dict]:
+        answer_parts: list[str] = []
+        final_data: dict = {}
+        metadata: dict = {}
+        task_id = ""
+
+        for raw_line in response.iter_lines(decode_unicode=True):
+            if not raw_line:
+                continue
+            if raw_line.startswith("event:"):
+                continue
+            if not raw_line.startswith("data:"):
+                continue
+
+            try:
+                event = json.loads(raw_line[5:].strip())
+            except json.JSONDecodeError:
+                logger.warning("Failed to decode Dify stream line: %s", raw_line[:300])
+                continue
+
+            task_id = task_id or str(event.get("task_id") or "")
+            if generation_id and task_id:
+                self._register_generation(generation_id, task_id, api_key, user_id)
+
+            event_type = event.get("event")
+            if event_type == "message":
+                answer_parts.append(event.get("answer") or "")
+                final_data["conversation_id"] = event.get("conversation_id") or final_data.get("conversation_id")
+                final_data["message_id"] = event.get("message_id") or final_data.get("message_id")
+            elif event_type == "message_end":
+                metadata = event.get("metadata") or {}
+                final_data["conversation_id"] = event.get("conversation_id") or final_data.get("conversation_id")
+                final_data["message_id"] = event.get("message_id") or final_data.get("message_id")
+            elif event_type == "workflow_finished":
+                data = event.get("data") or {}
+                outputs = data.get("outputs") or {}
+                if outputs.get("answer"):
+                    answer_parts = [outputs["answer"]]
+            elif event_type == "error":
+                logger.warning("Dify stream returned error: %s", event)
+                return None
+
+        final_data["answer"] = "".join(answer_parts)
+        final_data["metadata"] = metadata
+        return final_data if final_data["answer"] else None
+
+    @classmethod
+    def _register_generation(cls, generation_id: str, task_id: str, api_key: str, user_id: str) -> None:
+        with _generation_tasks_lock:
+            _generation_tasks[generation_id] = {
+                "task_id": task_id,
+                "api_key": api_key,
+                "user_id": user_id,
+            }
+
+    @classmethod
+    def _unregister_generation(cls, generation_id: str) -> None:
+        with _generation_tasks_lock:
+            _generation_tasks.pop(generation_id, None)
+
+    @classmethod
+    def stop_generation(cls, generation_id: str) -> bool:
+        with _generation_tasks_lock:
+            task = _generation_tasks.get(generation_id)
+
+        if not task:
+            return False
+
+        try:
+            response = requests.post(
+                f"{settings.dify_base_url.rstrip('/')}/chat-messages/{task['task_id']}/stop",
+                headers={"Authorization": f"Bearer {task['api_key']}", "Content-Type": "application/json"},
+                json={"user": task["user_id"]},
+                timeout=10,
+            )
+            if response.status_code >= 400:
+                logger.warning("Dify stop request failed. status=%s body=%s", response.status_code, response.text[:500])
+                return False
+            return True
+        except requests.RequestException as exc:
+            logger.warning("Dify stop request failed. generation_id=%s error=%s", generation_id, exc)
+            return False
+        finally:
+            cls._unregister_generation(generation_id)
+
+    def _upload_file_to_dify(
+        self,
+        api_key: str,
+        user_id: Optional[str],
+        attachment: ChatAttachment,
+    ) -> Optional[str]:
+        try:
+            if hasattr(attachment.file, "seek"):
+                attachment.file.seek(0)
+            response = requests.post(
+                f"{settings.dify_base_url.rstrip('/')}/files/upload",
+                headers={"Authorization": f"Bearer {api_key}"},
+                data={"user": user_id or "anonymous"},
+                files={
+                    "file": (
+                        attachment.filename,
+                        attachment.file,
+                        attachment.content_type or "application/octet-stream",
+                    )
+                },
+                timeout=settings.dify_timeout_seconds,
+            )
+            if response.status_code not in (200, 201):
+                logger.warning(
+                    "Dify file upload returned non-success status. status=%s body=%s",
+                    response.status_code,
+                    response.text[:1000],
+                )
+                return None
+            data = response.json()
+            return data.get("id")
+        except requests.Timeout as exc:
+            logger.warning(
+                "Dify file upload timed out after %ss. filename=%s error=%s",
+                settings.dify_timeout_seconds,
+                attachment.filename,
+                exc,
+            )
+            return None
+        except requests.RequestException as exc:
+            logger.warning("Dify file upload failed. filename=%s error=%s", attachment.filename, exc)
+            return None
+
+    def _dify_file_type(self, filename: str, content_type: str) -> str:
+        content_type = (content_type or "").lower()
+        suffix = Path(filename or "").suffix.lower().lstrip(".")
+        if content_type.startswith("image/"):
+            return "image"
+        if content_type.startswith("audio/"):
+            return "audio"
+        if content_type.startswith("video/"):
+            return "video"
+        if suffix in {"pdf", "txt", "md", "markdown", "html", "htm", "csv", "doc", "docx", "xls", "xlsx", "ppt", "pptx"}:
+            return "document"
+        return "custom"
 
     def _answer_from_faq(self, question: str, language: str) -> ChatResponse:
         faq = self._best_faq_match(question, language)
@@ -160,6 +424,8 @@ class ComplianceAnswerService:
         return best if best_score >= 0.18 else None
 
     def _source_infos(self, source_ids: list[int]) -> list[SourceInfo]:
+        if not self._has_active_package():
+            return []
         query = self.db.query(Source).filter(Source.tenant_id == self.tenant.id)
         if source_ids:
             query = query.filter(Source.id.in_(source_ids))
@@ -192,6 +458,28 @@ class ComplianceAnswerService:
         if DISCLAIMER not in answer:
             answer = f"{answer.strip()}\n\n风险提示：{DISCLAIMER}"
         return answer
+
+    def _with_context_prefix(self, answer: str, user_role: str, province: str, city: str) -> str:
+        role = USER_ROLE_LABELS.get(user_role, user_role or "员工")
+        region = f"{province}{city}" if province and city else (province or city or self.tenant.region)
+        return f"适用角色：{role}\n所在地区：{region}\n\n{answer}"
+
+    def _has_active_package(self) -> bool:
+        return (
+            self.db.query(KnowledgePackage.id)
+            .filter(KnowledgePackage.tenant_id == self.tenant.id, KnowledgePackage.status == "active")
+            .first()
+            is not None
+        )
+
+    def _inactive_package_answer(self, question: str) -> str:
+        risk = self._estimate_risk(question)
+        return (
+            "当前租户的知识包已停用，系统不会调用知识库文件或外部知识包检索。\n"
+            "请先在管理后台启用知识包，或由管理员确认当前资料可用后再进行智能问答。\n"
+            f"本次问题仅做通用风险识别，初步风险等级为：{risk}。\n\n"
+            f"风险提示：{DISCLAIMER}"
+        )
 
     def _fallback_answer(self, question: str) -> str:
         risk = self._estimate_risk(question)

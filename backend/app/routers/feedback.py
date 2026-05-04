@@ -12,6 +12,11 @@ from app.security import sanitize_text
 router = APIRouter(prefix="/api", tags=["反馈"])
 
 
+def _require_permission(current_admin: dict, permission: str) -> None:
+    if permission not in current_admin.get("permissions", []):
+        raise HTTPException(status_code=403, detail="当前账号没有该操作权限")
+
+
 @router.post("/feedback")
 async def create_feedback(
     request: FeedbackCreate,
@@ -53,6 +58,7 @@ async def get_feedbacks(
     db: Session = Depends(get_db),
     current_admin: dict = Depends(get_current_admin),
 ):
+    _require_permission(current_admin, "feedbacks")
     page, page_size = normalize_pagination(page, page_size)
     allowed_tenant_id = get_admin_tenant_filter(current_admin, tenant_id)
     query = db.query(Feedback)
@@ -89,6 +95,7 @@ async def update_feedback(
     db: Session = Depends(get_db),
     current_admin: dict = Depends(get_current_admin),
 ):
+    _require_permission(current_admin, "feedbacks")
     feedback = db.query(Feedback).filter(Feedback.id == feedback_id).first()
     if not feedback:
         raise HTTPException(status_code=404, detail="反馈不存在")
