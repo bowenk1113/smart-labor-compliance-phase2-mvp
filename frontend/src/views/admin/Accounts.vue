@@ -29,16 +29,18 @@
     <Teleport to="body">
       <div v-if="createModalOpen" class="modal-mask">
         <div class="modal account-modal">
-          <div class="section-title">
-            <h2>{{ t('createAccount') }}</h2>
-            <button class="btn ghost" type="button" @click="closeCreateModal">×</button>
-          </div>
-          <form class="form-grid" @submit.prevent="createAccount">
-            <div class="form-group"><label>{{ t('username') }}</label><input v-model="form.username" class="input" required /></div>
-            <div class="form-group"><label>{{ t('password') }}</label><input v-model="form.password" type="password" class="input" required /></div>
-            <div class="form-group"><label>{{ t('displayName') }}</label><input v-model="form.display_name" class="input" /></div>
-            <div class="form-group"><label>{{ t('role') }}</label><AppSelect v-model="form.role" :options="roleOptions" /></div>
-            <div class="form-group full modal-actions">
+          <form class="modal-form" @submit.prevent="createAccount">
+            <div class="section-title modal-header">
+              <h2>{{ t('createAccount') }}</h2>
+              <button class="btn ghost" type="button" @click="closeCreateModal">×</button>
+            </div>
+            <div class="modal-body form-grid">
+              <div class="form-group"><label>{{ t('username') }}</label><input v-model="form.username" class="input" required /></div>
+              <div class="form-group"><label>{{ t('password') }}</label><input v-model="form.password" type="password" class="input" required /></div>
+              <div class="form-group"><label>{{ t('displayName') }}</label><input v-model="form.display_name" class="input" /></div>
+              <div class="form-group"><label>{{ t('role') }}</label><AppSelect v-model="form.role" :options="roleOptions" /></div>
+            </div>
+            <div class="modal-actions modal-footer">
               <button class="btn" type="button" @click="closeCreateModal">{{ t('cancelEdit') }}</button>
               <button class="btn primary" type="submit">{{ t('createAccount') }}</button>
             </div>
@@ -123,9 +125,4 @@ onMounted(() => {
   width: min(760px, calc(100vw - 32px));
 }
 
-.modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-}
 </style>

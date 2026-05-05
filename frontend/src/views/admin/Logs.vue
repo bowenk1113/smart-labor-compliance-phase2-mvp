@@ -8,7 +8,7 @@
       </div>
       <AppTable :columns="logColumns" :rows="logs" :empty-text="t('noLogs')" :sequence-start="sequenceStart">
         <template #cell-risk_level="{ row }">
-          <span :class="['tag', riskClass(row.risk_level)]">{{ riskLabel(row.risk_level) }}</span>
+          <span :class="['tag', riskClass(displayedRiskLevel(row))]">{{ riskLabel(displayedRiskLevel(row)) }}</span>
         </template>
         <template #cell-response_time="{ row }">
           <EllipsisText :value="`${row.response_time}ms`" />
@@ -28,11 +28,12 @@
     <Teleport to="body">
       <div v-if="detailModalOpen" class="modal-mask">
         <div class="modal log-detail-modal">
-          <div class="section-title">
+          <div class="section-title modal-header">
             <h2>{{ t('logDetail') }}</h2>
             <button class="btn ghost" type="button" @click="closeLogDetail">×</button>
           </div>
-          <div v-if="selectedLog" class="log-detail">
+          <template v-if="selectedLog">
+          <div class="modal-body log-detail">
             <div class="detail-grid">
               <div>
                 <span>{{ t('tenant') }}</span>
@@ -44,7 +45,7 @@
               </div>
               <div>
                 <span>{{ t('risk') }}</span>
-                <strong>{{ riskLabel(selectedLog.risk_level) || '-' }}</strong>
+                <strong>{{ riskLabel(displayedRiskLevel(selectedLog)) || '-' }}</strong>
               </div>
               <div>
                 <span>{{ t('engine') }}</span>
@@ -87,10 +88,11 @@
                 </template>
               </div>
             </section>
-            <div class="modal-actions">
-              <button class="btn primary" type="button" @click="closeLogDetail">{{ t('close') }}</button>
-            </div>
           </div>
+          <div class="modal-actions modal-footer">
+            <button class="btn primary" type="button" @click="closeLogDetail">{{ t('close') }}</button>
+          </div>
+          </template>
         </div>
       </div>
     </Teleport>
@@ -101,6 +103,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { getLogDetail, getLogs } from '@/api'
 import { useI18n } from '@/i18n'
+import { displayedRiskLevel } from '@/utils/risk'
 import AppPagination from '@/components/AppPagination.vue'
 import AppSelect from '@/components/AppSelect.vue'
 import AppTable from '@/components/AppTable.vue'
@@ -220,11 +223,6 @@ onMounted(fetchLogs)
 
 .log-sources a:hover {
   border-color: var(--primary);
-}
-
-.modal-actions {
-  display: flex;
-  justify-content: flex-end;
 }
 
 @media (max-width: 760px) {

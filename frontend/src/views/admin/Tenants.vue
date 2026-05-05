@@ -27,19 +27,21 @@
     <Teleport to="body">
       <div v-if="createModalOpen" class="modal-mask">
         <div class="modal tenant-modal">
-          <div class="section-title">
-            <h2>{{ t('addTenant') }}</h2>
-            <button class="btn ghost" type="button" @click="closeCreateModal">×</button>
-          </div>
-          <form class="form-grid" @submit.prevent="createTenant">
-            <div class="form-group"><label>{{ t('tenantCode') }}</label><input v-model="form.code" class="input" required /></div>
-            <div class="form-group"><label>{{ t('tenantName') }}</label><input v-model="form.name" class="input" required /></div>
-            <div class="form-group"><label>{{ t('industry') }}</label><input v-model="form.industry" class="input" /></div>
-            <div class="form-group"><label>{{ t('region') }}</label><input v-model="form.region" class="input" /></div>
-            <div class="form-group"><label>{{ t('tenantAdmin') }}</label><input v-model="form.admin_username" class="input" :placeholder="t('optional')" /></div>
-            <div class="form-group"><label>{{ t('adminPassword') }}</label><input v-model="form.admin_password" class="input" type="password" :placeholder="t('min8')" /></div>
-            <div class="form-group full"><label>{{ t('notes') }}</label><textarea v-model="form.notes" class="textarea tenant-notes" /></div>
-            <div class="form-group full modal-actions">
+          <form class="modal-form" @submit.prevent="createTenant">
+            <div class="section-title modal-header">
+              <h2>{{ t('addTenant') }}</h2>
+              <button class="btn ghost" type="button" @click="closeCreateModal">×</button>
+            </div>
+            <div class="modal-body form-grid">
+              <div class="form-group"><label>{{ t('tenantCode') }}</label><input v-model="form.code" class="input" required /></div>
+              <div class="form-group"><label>{{ t('tenantName') }}</label><input v-model="form.name" class="input" required /></div>
+              <div class="form-group"><label>{{ t('industry') }}</label><input v-model="form.industry" class="input" /></div>
+              <div class="form-group"><label>{{ t('region') }}</label><input v-model="form.region" class="input" /></div>
+              <div class="form-group"><label>{{ t('tenantAdmin') }}</label><input v-model="form.admin_username" class="input" :placeholder="t('optional')" /></div>
+              <div class="form-group"><label>{{ t('adminPassword') }}</label><input v-model="form.admin_password" class="input" type="password" :placeholder="t('min8')" /></div>
+              <div class="form-group full"><label>{{ t('notes') }}</label><textarea v-model="form.notes" class="textarea tenant-notes" /></div>
+            </div>
+            <div class="modal-actions modal-footer">
               <button class="btn" type="button" @click="closeCreateModal">{{ t('cancelEdit') }}</button>
               <button class="btn primary" type="submit">{{ t('createTenant') }}</button>
             </div>
@@ -114,9 +116,4 @@ onMounted(fetchTenants)
   min-height: 100px;
 }
 
-.modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-}
 </style>

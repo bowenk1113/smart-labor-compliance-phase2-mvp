@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -195,15 +196,16 @@ class ComplianceAnswerService:
                         snippet=(resource.get("content") or "")[:220],
                     )
                 )
+            answer = self._normalize_answer(data.get("answer") or "")
             return ChatResponse(
-                answer=self._normalize_answer(data.get("answer") or ""),
+                answer=answer,
                 sources=sources or None,
                 related_tasks=self._extract_tasks(question),
                 response_time=0,
                 conversation_id=data.get("conversation_id"),
                 question_id=None,
                 provider="dify",
-                risk_level=self._estimate_risk(question),
+                risk_level=self._risk_from_answer(answer) or self._estimate_risk(question),
                 suggestions=self._suggestions(question),
                 disclaimer=DISCLAIMER,
             )
@@ -499,6 +501,35 @@ class ComplianceAnswerService:
         if any(word in question for word in medium_words):
             return "medium"
         return "low"
+
+    def _risk_from_answer(self, answer: str) -> Optional[str]:
+        text = sanitize_text(answer) or ""
+        patterns = [
+            r"风险等级\s*[:：]\s*(?:\*\*)?\s*(高风险|中风险|低风险|高|中|低|high|medium|low)",
+            r"初步风险等级\s*为\s*[:：]?\s*(?:\*\*)?\s*(高风险|中风险|低风险|高|中|低|high|medium|low)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+            if match:
+                return self._normalize_risk_level(match.group(1))
+        return None
+
+    def _normalize_risk_level(self, value: str) -> Optional[str]:
+        normalized = (sanitize_text(value) or "").strip().lower().strip("*：:，,。.;；")
+        mapping = {
+            "高": "high",
+            "高风险": "high",
+            "high": "high",
+            "中": "medium",
+            "中风险": "medium",
+            "中等": "medium",
+            "中等风险": "medium",
+            "medium": "medium",
+            "低": "low",
+            "低风险": "low",
+            "low": "low",
+        }
+        return mapping.get(normalized)
 
     def _suggestions(self, question: str) -> list[str]:
         if "产假" in question or "护理假" in question:

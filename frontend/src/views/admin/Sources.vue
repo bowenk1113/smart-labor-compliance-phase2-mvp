@@ -61,73 +61,75 @@
     <Teleport to="body">
       <div v-if="sourceModalOpen" class="modal-mask">
         <div class="modal source-modal">
-          <div class="section-title">
-            <h2>{{ editingId ? t('editSource') : t('addSource') }}</h2>
-            <button class="btn ghost" type="button" @click="closeSourceModal">×</button>
-          </div>
-          <form class="form-grid" @submit.prevent="saveSource">
-            <div class="form-group">
-              <label>{{ t('title') }} <span class="required-mark">*</span></label>
-              <input v-model.trim="form.title" class="input" required />
+          <form class="modal-form" @submit.prevent="saveSource">
+            <div class="section-title modal-header">
+              <h2>{{ editingId ? t('editSource') : t('addSource') }}</h2>
+              <button class="btn ghost" type="button" @click="closeSourceModal">×</button>
             </div>
-            <div class="form-group">
-              <label>{{ t('docType') }}</label>
-              <AppSelect v-model="form.doc_type" :options="docTypeOptions" :placeholder="t('docTypePlaceholder')" />
-            </div>
-            <div class="form-group"><label>{{ t('issuer') }}</label><input v-model="form.issuer" class="input" /></div>
-            <div class="form-group">
-              <label>{{ t('region') }}</label>
-              <AppSelect v-model="form.region" :options="regionOptions" :placeholder="t('regionPlaceholder')" />
-            </div>
-            <div class="form-group full">
-              <label>{{ t('sourcePath') }}</label>
-              <div class="source-path-tabs">
-                <button
-                  type="button"
-                  :class="['chip', sourceMode === 'link' ? 'active' : '']"
-                  @click="switchSourceMode('link')"
-                >
-                  {{ t('sourceByLink') }}
-                </button>
-                <button
-                  type="button"
-                  :class="['chip', sourceMode === 'file' ? 'active' : '']"
-                  @click="switchSourceMode('file')"
-                >
-                  {{ t('sourceByFile') }}
-                </button>
+            <div class="modal-body form-grid">
+              <div class="form-group">
+                <label>{{ t('title') }} <span class="required-mark">*</span></label>
+                <input v-model.trim="form.title" class="input" required />
               </div>
-            </div>
-            <div v-if="sourceMode === 'link'" class="form-group full">
-              <label>{{ t('link') }}</label>
-              <input v-model.trim="form.url" class="input" />
-              <div class="form-hint">{{ t('sourcePathRequired') }}</div>
-            </div>
-            <div v-else class="form-group full">
-              <label>{{ t('uploadFile') }}</label>
-              <div class="source-upload-box">
-                <div class="source-upload-main">
-                  <span class="source-upload-icon">↑</span>
-                  <div class="source-upload-copy">
-                    <strong>{{ selectedFile?.name || uploadedFileName || t('noFileSelected') }}</strong>
-                    <span>{{ uploadStatusText }}</span>
-                  </div>
-                </div>
-                <div class="source-upload-actions">
-                  <label class="btn source-file-picker">
-                    {{ t('selectFile') }}
-                    <input type="file" @change="handleFileChange" />
-                  </label>
-                  <button class="btn primary" type="button" :disabled="!selectedFile || uploading" @click="uploadSelectedFile">
-                    {{ uploading ? t('loading') : t('uploadFile') }}
+              <div class="form-group">
+                <label>{{ t('docType') }}</label>
+                <AppSelect v-model="form.doc_type" :options="docTypeOptions" :placeholder="t('docTypePlaceholder')" />
+              </div>
+              <div class="form-group"><label>{{ t('issuer') }}</label><input v-model="form.issuer" class="input" /></div>
+              <div class="form-group">
+                <label>{{ t('region') }}</label>
+                <AppSelect v-model="form.region" :options="regionOptions" :placeholder="t('regionPlaceholder')" />
+              </div>
+              <div class="form-group full">
+                <label>{{ t('sourcePath') }}</label>
+                <div class="source-path-tabs">
+                  <button
+                    type="button"
+                    :class="['chip', sourceMode === 'link' ? 'active' : '']"
+                    @click="switchSourceMode('link')"
+                  >
+                    {{ t('sourceByLink') }}
+                  </button>
+                  <button
+                    type="button"
+                    :class="['chip', sourceMode === 'file' ? 'active' : '']"
+                    @click="switchSourceMode('file')"
+                  >
+                    {{ t('sourceByFile') }}
                   </button>
                 </div>
               </div>
-              <div class="form-hint">{{ t('sourcePathRequired') }}</div>
+              <div v-if="sourceMode === 'link'" class="form-group full">
+                <label>{{ t('link') }}</label>
+                <input v-model.trim="form.url" class="input" />
+                <div class="form-hint">{{ t('sourcePathRequired') }}</div>
+              </div>
+              <div v-else class="form-group full">
+                <label>{{ t('uploadFile') }}</label>
+                <div class="source-upload-box">
+                  <div class="source-upload-main">
+                    <span class="source-upload-icon">↑</span>
+                    <div class="source-upload-copy">
+                      <strong>{{ selectedFile?.name || uploadedFileName || t('noFileSelected') }}</strong>
+                      <span>{{ uploadStatusText }}</span>
+                    </div>
+                  </div>
+                  <div class="source-upload-actions">
+                    <label class="btn source-file-picker">
+                      {{ t('selectFile') }}
+                      <input type="file" @change="handleFileChange" />
+                    </label>
+                    <button class="btn primary" type="button" :disabled="!selectedFile || uploading" @click="uploadSelectedFile">
+                      {{ uploading ? t('loading') : t('uploadFile') }}
+                    </button>
+                  </div>
+                </div>
+                <div class="form-hint">{{ t('sourcePathRequired') }}</div>
+              </div>
+              <div v-if="formError" class="form-group full form-error">{{ formError }}</div>
+              <div class="form-group full"><label>{{ t('description') }}</label><textarea v-model="form.description" class="textarea source-description" /></div>
             </div>
-            <div v-if="formError" class="form-group full form-error">{{ formError }}</div>
-            <div class="form-group full"><label>{{ t('description') }}</label><textarea v-model="form.description" class="textarea source-description" /></div>
-            <div class="form-group full modal-actions">
+            <div class="modal-actions modal-footer">
               <button class="btn" type="button" @click="closeSourceModal">{{ t('cancelEdit') }}</button>
               <button class="btn primary" type="submit">{{ editingId ? t('saveChanges') : t('addSource') }}</button>
             </div>
@@ -139,11 +141,12 @@
     <Teleport to="body">
       <div v-if="detailModalOpen" class="modal-mask">
         <div class="modal source-detail-modal">
-          <div class="section-title">
+          <div class="section-title modal-header">
             <h2>{{ t('sourceDetail') }}</h2>
             <button class="btn ghost" type="button" @click="closeSourceDetail">×</button>
           </div>
-          <div v-if="selectedSource" class="source-detail">
+          <template v-if="selectedSource">
+          <div class="modal-body source-detail">
             <div class="detail-grid">
               <div>
                 <span>{{ t('reviewStatus') }}</span>
@@ -191,10 +194,11 @@
               <h3>{{ t('description') }}</h3>
               <p class="preline">{{ selectedSource.description || '-' }}</p>
             </section>
-            <div class="modal-actions">
-              <button class="btn primary" type="button" @click="closeSourceDetail">{{ t('close') }}</button>
-            </div>
           </div>
+          <div class="modal-actions modal-footer">
+            <button class="btn primary" type="button" @click="closeSourceDetail">{{ t('close') }}</button>
+          </div>
+          </template>
         </div>
       </div>
     </Teleport>
@@ -616,12 +620,6 @@ onMounted(fetchSources)
 
 .source-title-cell .tag {
   flex: 0 0 auto;
-}
-
-.modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
 }
 
 @media (max-width: 720px) {

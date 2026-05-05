@@ -47,18 +47,20 @@
     <Teleport to="body">
       <div v-if="faqModalOpen" class="modal-mask">
         <div class="modal faq-modal">
-          <div class="section-title">
-            <h2>{{ editingId ? t('editFaq') : t('addFaq') }}</h2>
-            <button class="btn ghost" type="button" @click="closeFaqModal">×</button>
-          </div>
-          <form class="form-grid" @submit.prevent="saveFaq">
-            <div class="form-group full"><label>{{ t('question') }}</label><input v-model="form.question" class="input" required /></div>
-            <div class="form-group"><label>{{ t('category') }}</label><input v-model="form.category" class="input" /></div>
-            <div class="form-group"><label>{{ t('risk') }}</label><AppSelect v-model="form.risk_level" :options="riskOptions" /></div>
-            <div class="form-group"><label>{{ t('region') }}</label><input v-model="form.region" class="input" /></div>
-            <div class="form-group"><label>{{ t('keywords') }}</label><input v-model="keywordText" class="input" :placeholder="t('commaSeparated')" /></div>
-            <div class="form-group full"><label>{{ t('answer') }}</label><textarea v-model="form.answer" class="textarea faq-answer" required /></div>
-            <div class="form-group full modal-actions">
+          <form class="modal-form" @submit.prevent="saveFaq">
+            <div class="section-title modal-header">
+              <h2>{{ editingId ? t('editFaq') : t('addFaq') }}</h2>
+              <button class="btn ghost" type="button" @click="closeFaqModal">×</button>
+            </div>
+            <div class="modal-body form-grid">
+              <div class="form-group full"><label>{{ t('question') }}</label><input v-model="form.question" class="input" required /></div>
+              <div class="form-group"><label>{{ t('category') }}</label><input v-model="form.category" class="input" /></div>
+              <div class="form-group"><label>{{ t('risk') }}</label><AppSelect v-model="form.risk_level" :options="riskOptions" /></div>
+              <div class="form-group"><label>{{ t('region') }}</label><input v-model="form.region" class="input" /></div>
+              <div class="form-group"><label>{{ t('keywords') }}</label><input v-model="keywordText" class="input" :placeholder="t('commaSeparated')" /></div>
+              <div class="form-group full"><label>{{ t('answer') }}</label><textarea v-model="form.answer" class="textarea faq-answer" required /></div>
+            </div>
+            <div class="modal-actions modal-footer">
               <button class="btn" type="button" @click="closeFaqModal">{{ t('cancelEdit') }}</button>
               <button class="btn primary" type="submit">{{ editingId ? t('saveChanges') : t('addFaq') }}</button>
             </div>
@@ -226,9 +228,4 @@ onMounted(fetchFaqs)
   cursor: pointer;
 }
 
-.modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-}
 </style>

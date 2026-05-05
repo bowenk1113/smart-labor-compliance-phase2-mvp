@@ -136,3 +136,21 @@ def test_dify_stream_parser_handles_message_workflow_and_invalid_lines(api_base_
         service = ComplianceAnswerService(db, tenant)
         workflow = service._consume_dify_stream(WorkflowResponse(), None, "key", "user")
     assert workflow["answer"] == "工作流最终回答"
+
+
+def test_dify_answer_risk_level_takes_precedence_over_question_estimate(api_base_url):
+    import os
+
+    os.environ["DB_NAME"] = "employment_slc_auto_test"
+    from app.database import SessionLocal
+    from app.models import Tenant
+    from app.services.dify_service import ComplianceAnswerService
+
+    with SessionLocal() as db:
+        tenant = db.query(Tenant).filter(Tenant.code == "demo-sx").first()
+        service = ComplianceAnswerService(db, tenant)
+
+        assert service._estimate_risk("公司不发工资怎么办") == "low"
+        assert service._risk_from_answer("风险等级：高\n\n结论：公司拖欠工资属于严重风险。") == "high"
+        assert service._risk_from_answer("初步风险等级为：中风险。建议复核。") == "medium"
+        assert service._risk_from_answer("风险等级：low") == "low"

@@ -154,6 +154,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { chat, chatWithFile, getRecommendedQuestions, getTenantCode, getTenantPublic, setTenantCode, stopChatGeneration, submitFeedback } from '@/api'
 import { useI18n } from '@/i18n'
+import { displayedRiskLevel as getDisplayedRiskLevel, normalizeRiskLevel, riskFromAnswer } from '@/utils/risk'
 import AppSelect from '@/components/AppSelect.vue'
 import AppTopbar from '@/components/AppTopbar.vue'
 
@@ -184,8 +185,9 @@ const requestController = ref(null)
 const stopping = ref(false)
 const LAST_CHAT_KEY = 'chat_last_state'
 
-const riskText = computed(() => riskLabel(riskLevel.value))
-const riskClass = computed(() => riskLevel.value === 'high' ? 'danger' : riskLevel.value === 'medium' ? 'warning' : 'success')
+const displayedRiskLevel = computed(() => getDisplayedRiskLevel({ answer: answer.value, risk_level: riskLevel.value }))
+const riskText = computed(() => riskLabel(displayedRiskLevel.value))
+const riskClass = computed(() => displayedRiskLevel.value === 'high' ? 'danger' : displayedRiskLevel.value === 'medium' ? 'warning' : 'success')
 const userRoleOptions = computed(() => [
   { value: 'enterprise_hr', label: t('roleEnterpriseHr') },
   { value: 'administrator_staff', label: t('roleAdministrativeStaff') },
@@ -251,7 +253,7 @@ const saveLastChat = () => {
     tasks: tasks.value,
     suggestions: suggestions.value,
     provider: provider.value,
-    riskLevel: riskLevel.value,
+    riskLevel: displayedRiskLevel.value,
     questionId: questionId.value
   }))
 }
@@ -268,7 +270,7 @@ const restoreLastChat = () => {
     tasks.value = data.tasks || []
     suggestions.value = data.suggestions || []
     provider.value = data.provider || ''
-    riskLevel.value = data.riskLevel || 'medium'
+    riskLevel.value = riskFromAnswer(data.answer) || normalizeRiskLevel(data.riskLevel) || 'medium'
     questionId.value = data.questionId || null
   } catch (error) {
     localStorage.removeItem(LAST_CHAT_KEY)
@@ -357,7 +359,7 @@ const submitQuestion = async () => {
     tasks.value = data.related_tasks || []
     suggestions.value = data.suggestions || []
     provider.value = data.provider || 'local_faq'
-    riskLevel.value = data.risk_level || 'medium'
+    riskLevel.value = riskFromAnswer(data.answer) || normalizeRiskLevel(data.risk_level) || 'medium'
     questionId.value = data.question_id
     answeredQuestion.value = submittedQuestion
     saveLastChat()

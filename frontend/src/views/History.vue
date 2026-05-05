@@ -93,77 +93,79 @@
     <Teleport to="body">
       <div v-if="detailModalOpen" class="modal-mask">
         <div class="modal history-detail-modal">
-          <div class="section-title">
+          <div class="section-title modal-header">
             <h2>{{ t('historyDetail') }}</h2>
             <button class="btn ghost" type="button" @click="closeDetail">×</button>
           </div>
-          <div v-if="selectedItem" class="history-detail">
-            <div class="detail-grid">
-              <div>
-                <span>{{ t('engine') }}</span>
-                <strong>{{ selectedItem.provider || '-' }}</strong>
-              </div>
-              <div>
-                <span>{{ t('risk') }}</span>
-                <strong>{{ riskLabel(selectedItem.risk_level) || '-' }}</strong>
-              </div>
-              <div>
-                <span>{{ t('status') }}</span>
-                <strong>{{ statusLabel(selectedItem.status) || selectedItem.status || '-' }}</strong>
-              </div>
-              <div>
-                <span>{{ t('response') }}</span>
-                <strong>{{ selectedItem.response_time ?? '-' }}ms</strong>
-              </div>
-              <div>
-                <span>{{ t('userId') }}</span>
-                <strong>{{ selectedItem.user_id || '-' }}</strong>
-              </div>
-              <div>
-                <span>{{ t('time') }}</span>
-                <strong>{{ formatTime(selectedItem.created_at) || '-' }}</strong>
-              </div>
-            </div>
-
-            <section>
-              <h3>{{ t('question') }}</h3>
-              <p class="preline">{{ selectedItem.question }}</p>
-            </section>
-            <section>
-              <h3>{{ t('answer') }}</h3>
-              <p class="preline">{{ selectedItem.answer || '-' }}</p>
-            </section>
-            <section v-if="sourceList.length">
-              <h3>{{ t('sourcesInfo') }}</h3>
-              <div class="history-sources">
-                <template v-for="(source, index) in sourceList" :key="`${source.title || ''}-${source.url || ''}-${index}`">
-                  <a v-if="validSourceUrl(source.url)" :href="source.url" target="_blank" rel="noreferrer">
-                    <strong>{{ source.title || source.url || '-' }}</strong>
-                    <span>{{ source.snippet || source.url || '' }}</span>
-                  </a>
-                  <div v-else class="history-source-card">
-                    <strong>{{ source.title || '-' }}</strong>
-                    <span>{{ source.snippet || source.url || '' }}</span>
-                  </div>
-                </template>
-              </div>
-            </section>
-            <section v-if="taskList.length">
-              <h3>{{ t('tasks') }}</h3>
-              <div class="history-tasks">
-                <div v-for="(task, taskIndex) in taskList" :key="`${task.title || ''}-${taskIndex}`" class="history-task-card">
-                  <strong>{{ task.title || '-' }}</strong>
-                  <ol>
-                    <li v-for="(step, stepIndex) in task.steps || []" :key="`${step}-${stepIndex}`">{{ step }}</li>
-                  </ol>
+          <template v-if="selectedItem">
+            <div class="modal-body history-detail">
+              <div class="detail-grid">
+                <div>
+                  <span>{{ t('engine') }}</span>
+                  <strong>{{ selectedItem.provider || '-' }}</strong>
+                </div>
+                <div>
+                  <span>{{ t('risk') }}</span>
+                  <strong>{{ riskLabel(displayedRiskLevel(selectedItem)) || '-' }}</strong>
+                </div>
+                <div>
+                  <span>{{ t('status') }}</span>
+                  <strong>{{ statusLabel(selectedItem.status) || selectedItem.status || '-' }}</strong>
+                </div>
+                <div>
+                  <span>{{ t('response') }}</span>
+                  <strong>{{ selectedItem.response_time ?? '-' }}ms</strong>
+                </div>
+                <div>
+                  <span>{{ t('userId') }}</span>
+                  <strong>{{ selectedItem.user_id || '-' }}</strong>
+                </div>
+                <div>
+                  <span>{{ t('time') }}</span>
+                  <strong>{{ formatTime(selectedItem.created_at) || '-' }}</strong>
                 </div>
               </div>
-            </section>
-            <div class="modal-actions">
+
+              <section>
+                <h3>{{ t('question') }}</h3>
+                <p class="preline">{{ selectedItem.question }}</p>
+              </section>
+              <section>
+                <h3>{{ t('answer') }}</h3>
+                <p class="preline">{{ selectedItem.answer || '-' }}</p>
+              </section>
+              <section v-if="sourceList.length">
+                <h3>{{ t('sourcesInfo') }}</h3>
+                <div class="history-sources">
+                  <template v-for="(source, index) in sourceList" :key="`${source.title || ''}-${source.url || ''}-${index}`">
+                    <a v-if="validSourceUrl(source.url)" :href="source.url" target="_blank" rel="noreferrer">
+                      <strong>{{ source.title || source.url || '-' }}</strong>
+                      <span>{{ source.snippet || source.url || '' }}</span>
+                    </a>
+                    <div v-else class="history-source-card">
+                      <strong>{{ source.title || '-' }}</strong>
+                      <span>{{ source.snippet || source.url || '' }}</span>
+                    </div>
+                  </template>
+                </div>
+              </section>
+              <section v-if="taskList.length">
+                <h3>{{ t('tasks') }}</h3>
+                <div class="history-tasks">
+                  <div v-for="(task, taskIndex) in taskList" :key="`${task.title || ''}-${taskIndex}`" class="history-task-card">
+                    <strong>{{ task.title || '-' }}</strong>
+                    <ol>
+                      <li v-for="(step, stepIndex) in task.steps || []" :key="`${step}-${stepIndex}`">{{ step }}</li>
+                    </ol>
+                  </div>
+                </div>
+              </section>
+            </div>
+            <div class="modal-actions modal-footer">
               <button class="btn" type="button" @click="exportOne(selectedItem)">{{ t('exportSingle') }}</button>
               <button class="btn primary" type="button" @click="closeDetail">{{ t('close') }}</button>
             </div>
-          </div>
+          </template>
         </div>
       </div>
     </Teleport>
@@ -174,6 +176,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { clearHistory, exportHistory, getHistory, getTenantPublic } from '@/api'
 import { useI18n } from '@/i18n'
+import { displayedRiskLevel } from '@/utils/risk'
 import AppPagination from '@/components/AppPagination.vue'
 import AppSelect from '@/components/AppSelect.vue'
 import AppTopbar from '@/components/AppTopbar.vue'
@@ -442,8 +445,7 @@ onMounted(() => {
   padding-left: 28px;
 }
 
-.history-card-actions,
-.modal-actions {
+.history-card-actions {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
@@ -457,6 +459,7 @@ onMounted(() => {
 
 .history-detail-modal {
   width: min(980px, calc(100vw - 32px));
+  max-height: min(760px, calc(100vh - 32px));
 }
 
 .history-detail {
@@ -491,8 +494,6 @@ onMounted(() => {
 
 .history-detail p {
   margin: 0;
-  max-height: 320px;
-  overflow: auto;
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -545,6 +546,11 @@ onMounted(() => {
 
   .detail-grid {
     grid-template-columns: 1fr;
+  }
+
+  .history-detail-modal {
+    width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
   }
 }
 </style>
