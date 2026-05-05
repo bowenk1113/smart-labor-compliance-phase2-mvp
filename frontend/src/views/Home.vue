@@ -49,6 +49,31 @@
             </button>
           </div>
 
+          <div v-if="loading" class="answer-loading" role="status" aria-live="polite">
+            <div class="loading-orbit" aria-hidden="true">
+              <span></span>
+              <span></span>
+              <span></span>
+            </div>
+            <div class="loading-copy">
+              <div class="loading-title">
+                <span>{{ t('answerLoadingTitle') }}</span>
+                <i aria-hidden="true"></i>
+              </div>
+              <p>{{ t('answerLoadingDesc') }}</p>
+              <div class="loading-steps" aria-hidden="true">
+                <span>{{ t('answerLoadingStepReview') }}</span>
+                <span>{{ t('answerLoadingStepRetrieve') }}</span>
+                <span>{{ t('answerLoadingStepCompose') }}</span>
+              </div>
+            </div>
+            <div class="loading-skeleton" aria-hidden="true">
+              <span></span>
+              <span></span>
+              <span></span>
+            </div>
+          </div>
+
           <div v-if="answer" class="answer-block">
             <div class="section-title">
               <h2>{{ t('answer') }}</h2>
@@ -491,6 +516,145 @@ watch(city, (value) => {
   padding-top: 18px;
 }
 
+.answer-loading {
+  position: relative;
+  overflow: hidden;
+  margin-top: 18px;
+  min-height: 132px;
+  padding: 18px;
+  border: 1px solid rgba(23, 105, 224, 0.18);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(23, 105, 224, 0.08), rgba(22, 133, 95, 0.06)),
+    var(--surface-soft);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 16px;
+  align-items: center;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.48);
+}
+
+.answer-loading::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(110deg, transparent 0%, rgba(255, 255, 255, 0.48) 42%, transparent 72%);
+  transform: translateX(-100%);
+  animation: loading-sheen 2.4s ease-in-out infinite;
+}
+
+.loading-orbit,
+.loading-copy,
+.loading-skeleton {
+  position: relative;
+  z-index: 1;
+}
+
+.loading-orbit {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: rgba(23, 105, 224, 0.08);
+}
+
+.loading-orbit::before {
+  content: "";
+  position: absolute;
+  inset: 5px;
+  border-radius: inherit;
+  border: 2px solid rgba(23, 105, 224, 0.18);
+  border-top-color: var(--primary);
+  animation: loading-spin 1.05s linear infinite;
+}
+
+.loading-orbit span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--primary);
+  animation: loading-dot 1.1s ease-in-out infinite;
+}
+
+.loading-orbit span:nth-child(2) {
+  animation-delay: 0.16s;
+}
+
+.loading-orbit span:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+.loading-copy {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.loading-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.loading-title i {
+  width: 34px;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--primary), rgba(22, 133, 95, 0.3));
+  animation: loading-pulse 1.2s ease-in-out infinite;
+}
+
+.loading-copy p {
+  margin: 0;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.loading-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.loading-steps span {
+  min-height: 24px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.loading-skeleton {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 8px;
+}
+
+.loading-skeleton span {
+  height: 10px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(23, 105, 224, 0.1), rgba(23, 105, 224, 0.2), rgba(23, 105, 224, 0.1));
+  background-size: 240% 100%;
+  animation: loading-skeleton 1.5s ease-in-out infinite;
+}
+
+.loading-skeleton span:nth-child(2) {
+  width: 82%;
+  animation-delay: 0.1s;
+}
+
+.loading-skeleton span:nth-child(3) {
+  width: 58%;
+  animation-delay: 0.2s;
+}
+
 .answer-text {
   padding: 16px;
   background: var(--surface-soft);
@@ -552,5 +716,76 @@ watch(city, (value) => {
   margin-top: 12px;
   display: grid;
   gap: 10px;
+}
+
+@keyframes loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes loading-dot {
+  0%,
+  80%,
+  100% {
+    transform: translateY(4px);
+    opacity: 0.36;
+  }
+
+  40% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
+@keyframes loading-sheen {
+  45%,
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes loading-pulse {
+  0%,
+  100% {
+    transform: scaleX(0.72);
+    opacity: 0.42;
+  }
+
+  50% {
+    transform: scaleX(1);
+    opacity: 1;
+  }
+}
+
+@keyframes loading-skeleton {
+  0% {
+    background-position: 100% 0;
+  }
+
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .answer-loading {
+    grid-template-columns: 1fr;
+  }
+
+  .loading-orbit {
+    width: 46px;
+    height: 46px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .answer-loading::before,
+  .loading-orbit::before,
+  .loading-orbit span,
+  .loading-title i,
+  .loading-skeleton span {
+    animation: none;
+  }
 }
 </style>
