@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import BinaryIO, Optional
+from typing import Any, BinaryIO, Optional, cast
 
 import requests
 from sqlalchemy import or_
@@ -84,8 +84,10 @@ class ComplianceAnswerService:
             )
             return response
 
-        dify_key = self.tenant.dify_api_key or settings.dify_api_key
-        if dify_key:
+        tenant_dify_key_value = getattr(self.tenant, "dify_api_key", None)
+        tenant_dify_key = str(tenant_dify_key_value).strip() if tenant_dify_key_value is not None else ""
+        dify_key = tenant_dify_key if tenant_dify_key != "" else str(settings.dify_api_key or "")
+        if dify_key != "":
             dify_response = self._call_dify(
                 question,
                 dify_key,
@@ -374,15 +376,17 @@ class ComplianceAnswerService:
     def _answer_from_faq(self, question: str, language: str) -> ChatResponse:
         faq = self._best_faq_match(question, language)
         if faq:
-            answer = self._normalize_answer(faq.answer)
-            source_infos = self._source_infos(faq.source_ids or [])
+            faq_obj = cast(Any, faq)
+            answer = self._normalize_answer(str(faq_obj.answer or ""))
+            source_ids = faq_obj.source_ids if isinstance(faq_obj.source_ids, list) else []
+            source_infos = self._source_infos(source_ids)
             return ChatResponse(
                 answer=answer,
                 sources=source_infos or None,
                 related_tasks=self._extract_tasks(question),
                 response_time=0,
                 provider="local_faq",
-                risk_level=faq.risk_level,
+                risk_level=str(faq_obj.risk_level or "medium"),
                 suggestions=self._suggestions(question),
                 disclaimer=DISCLAIMER,
             )
@@ -415,7 +419,8 @@ class ComplianceAnswerService:
         best_score = 0.0
         best = None
         normalized_question = question.lower()
-        for faq in candidates:
+        for faq_item in candidates:
+            faq = cast(Any, faq_item)
             terms = [faq.question, *(faq.aliases or []), *(faq.keywords or [])]
             score = max(SequenceMatcher(None, normalized_question, term.lower()).ratio() for term in terms if term)
             if any(term and term in question for term in terms):
@@ -434,10 +439,17 @@ class ComplianceAnswerService:
         else:
             query = query.order_by(Source.created_at.desc()).limit(3)
         sources = query.all()
-        return [
-            SourceInfo(title=item.title, url=item.url, snippet=item.description)
-            for item in sources
-        ]
+        result = []
+        for item in sources:
+            source = cast(Any, item)
+            result.append(
+                SourceInfo(
+                    title=str(source.title or ""),
+                    url=str(source.url) if source.url else None,
+                    snippet=str(source.description) if source.description else None,
+                )
+            )
+        return result
 
     def _extract_tasks(self, question: str) -> list[TaskInfo]:
         if not any(word in question for word in ["仲裁", "办理", "申请", "共济", "医保"]):

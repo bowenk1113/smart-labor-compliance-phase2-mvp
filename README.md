@@ -43,6 +43,20 @@
 
 以下命令默认从项目根目录执行。
 
+推荐使用一键脚本同时启动后端与前端：
+
+```bash
+./scripts/start_project.sh
+```
+
+访问 `http://localhost:3000`。停止项目：
+
+```bash
+./scripts/stop_project.sh
+```
+
+如需手工排障，也可以分别启动：
+
 ```bash
 cd backend
 python -m pip install -r requirements.txt
@@ -54,8 +68,6 @@ cd frontend
 npm install
 npm run dev
 ```
-
-访问 `http://localhost:3000`。
 
 ## 初始账号
 

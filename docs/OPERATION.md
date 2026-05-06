@@ -17,9 +17,53 @@
 
 首次交付到生产环境前必须修改 `.env` 中的 `JWT_SECRET_KEY` 和初始密码。
 
-## 3. 启动步骤
+## 3. 一键启动与停止
 
 以下命令默认从项目根目录执行。
+
+启动前请确认本机 MySQL 已可访问，默认连接 `127.0.0.1:3306/employment`。一键启动会依次启动后端 API 与前端 Vite 开发服务，并将 PID 与日志写入本项目目录：
+
+```bash
+./scripts/start_project.sh
+```
+
+启动完成后访问：
+
+- 前端页面：`http://localhost:3000`
+- 后端接口：`http://127.0.0.1:8000`
+- API 文档：`http://127.0.0.1:8000/docs`
+
+停止项目：
+
+```bash
+./scripts/stop_project.sh
+```
+
+脚本运行文件：
+
+- 后端日志：`logs/backend.log`
+- 前端日志：`logs/frontend.log`
+- PID 文件：`.run/backend.pid`、`.run/frontend.pid`
+
+常用环境变量：
+
+```bash
+# 指定 Python 解释器，适合本机存在多个 Python/Conda 环境时使用
+PYTHON_BIN=/path/to/python ./scripts/start_project.sh
+
+# 跳过依赖自动安装，只做依赖检查与启动
+INSTALL_DEPS=0 ./scripts/start_project.sh
+
+# 临时调整端口，前端代理会自动指向同一次启动的后端端口
+BACKEND_PORT=8001 FRONTEND_PORT=3001 ./scripts/start_project.sh
+
+# 开启后端热重载；如果文件监听权限受限，可去掉该变量使用默认稳定启动
+BACKEND_RELOAD=1 ./scripts/start_project.sh
+```
+
+## 4. 手工启动步骤
+
+一键脚本异常时，可按以下命令分别启动和查看报错。
 
 后端：
 
@@ -37,7 +81,7 @@ npm install
 npm run dev
 ```
 
-## 4. 数据库说明
+## 5. 数据库说明
 
 项目使用本机 Docker MySQL：
 
@@ -49,7 +93,7 @@ npm run dev
 
 新项目表统一使用 `slc_` 前缀。启动后会自动建表并导入演示数据，手工建表参考 `sql/init_schema.sql`。
 
-## 5. 多租户隔离
+## 6. 多租户隔离
 
 - 租户主表：`slc_tenants`
 - 所有业务表均包含 `tenant_id`
@@ -57,7 +101,7 @@ npm run dev
 - 后台租户管理员只能访问本租户数据
 - 超级管理员可查看所有租户并创建新租户
 
-## 6. Dify 与 RAGFlow 接入
+## 7. Dify 与 RAGFlow 接入
 
 当前项目按“可配置接入 + 本地 FAQ 兜底”实现：
 
@@ -80,7 +124,7 @@ Dify 工作流建议输出结构：
 }
 ```
 
-## 7. 安全控制
+## 8. 安全控制
 
 - JWT 登录认证，密码使用 bcrypt 哈希
 - 角色权限：超级管理员、租户管理员、运营人员、只读人员
@@ -90,7 +134,7 @@ Dify 工作流建议输出结构：
 - 聊天问题、反馈、备注写库前会脱敏身份证号、手机号、银行卡号和邮箱
 - CORS 默认只允许本机前端开发地址
 
-## 8. 演示数据
+## 9. 演示数据
 
 初始化会导入：
 
@@ -103,7 +147,7 @@ Dify 工作流建议输出结构：
 
 其中“陕西最低工资标准通知”等来源标记为演示/待复核口径，正式使用前需按官网最新政策核验。
 
-## 9. 文档维护约定
+## 10. 文档维护约定
 
 - 根目录 `README.md` 维护项目总览、技术栈优势、快速启动和文档入口。
 - `backend/README.md` 维护后端启动、配置、初始化和后端技术栈说明。
