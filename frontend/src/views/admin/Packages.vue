@@ -6,6 +6,12 @@
         <div class="toolbar">
           <button v-if="canExport" class="btn" @click="exportCurrentPackages">{{ t('exportData') }}</button>
           <button v-if="canExport" class="btn" :disabled="!selectedIds.length" @click="exportSelectedPackages">{{ t('exportSelected') }}</button>
+          <!-- RAG 状态用于查看最近一次 FAQ 同步、runtime 文件和索引缓存状态。 -->
+          <button class="btn" @click="showRagStatus">{{ t('ragSyncStatus') }}</button>
+          <!-- 刷新本地 RAG 只清空缓存，不会删除数据库或知识库文件。 -->
+          <button class="btn" @click="reloadLocalCache">{{ t('reloadLocalRag') }}</button>
+          <!-- 重建 Milvus 是重量操作，只给有批量/知识包权限的管理人员显示。 -->
+          <button v-if="canBatch" class="btn primary" @click="rebuildMilvus">{{ t('rebuildMilvus') }}</button>
           <label v-if="canImport" class="btn import-button">
             {{ t('importData') }}
             <input type="file" accept=".csv,text/csv" @change="handleImport" />
@@ -42,7 +48,7 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { batchKnowledgePackages, exportKnowledgePackages, getKnowledgePackages, importKnowledgePackages, updatePackageStatus } from '@/api'
+import { batchKnowledgePackages, exportKnowledgePackages, getKnowledgePackages, getRagSyncStatus, importKnowledgePackages, rebuildRagMilvus, reloadRagLocalCache, updatePackageStatus } from '@/api'
 import { useI18n } from '@/i18n'
 import AppPagination from '@/components/AppPagination.vue'
 import AppTable from '@/components/AppTable.vue'
@@ -119,6 +125,24 @@ const batchDeleteSelected = async () => {
   await batchKnowledgePackages({ action: 'delete', ids: selectedIds.value })
   selectedIds.value = []
   fetchPackages()
+}
+const showRagStatus = async () => {
+  // 读取后端同步状态，并用最轻量的 alert 展示关键字段，避免改动现有页面布局。
+  const res = await getRagSyncStatus()
+  const data = res.data || {}
+  alert(`${t('ragBackend')}: ${data.backend || '-'}\n${t('lastSync')}: ${data.last_sync_at || '-'}\n${t('lastAction')}: ${data.last_action || '-'}`)
+}
+const reloadLocalCache = async () => {
+  // Local MVP 模式下，清缓存后下一次问答会重新读取 faq.csv / faq_runtime.csv。
+  await reloadRagLocalCache()
+  alert(t('ragLocalReloaded'))
+}
+const rebuildMilvus = async () => {
+  // Milvus 重建会重新写入 collection，因此先让管理员确认。
+  if (!confirm(t('rebuildMilvusConfirm'))) return
+  // reset_collections=true 适合 MVP 演示，能避免旧向量残留。
+  await rebuildRagMilvus({ reset_collections: true })
+  alert(t('rebuildMilvusDone'))
 }
 onMounted(fetchPackages)
 </script>

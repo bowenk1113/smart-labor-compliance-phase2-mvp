@@ -37,3 +37,7 @@ env/
 
 # Node modules (already handled in frontend)
 node_modules/
+
+backend/rag_data/
+model/
+storage/

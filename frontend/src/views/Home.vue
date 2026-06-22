@@ -1,5 +1,6 @@
 <template>
   <div class="app-page">
+    <!-- Top bar shows tenant identity, navigation, and theme/language controls. -->
     <AppTopbar :tenant="tenant" />
 
     <main class="split-workspace">
@@ -36,6 +37,7 @@
           <div class="split-actions" style="margin-top: 12px">
             <div class="toolbar">
               <input v-model="tenantCode" class="input" style="width: 150px" :placeholder="t('tenantCode')" :disabled="loading" @change="persistTenant" />
+              <AppSelect class="context-select scenario-select" v-model="activeScenario" :options="scenarioOptions" :disabled="loading" />
               <AppSelect class="context-select role-select" v-model="userRole" :options="userRoleOptions" :disabled="loading" />
               <AppSelect class="context-select region-select" v-model="province" :options="provinceOptions" :disabled="loading" @change="handleProvinceChange" />
               <AppSelect class="context-select region-select" v-model="city" :options="cityOptions" :disabled="loading" />
@@ -79,6 +81,7 @@
               <h2>{{ t('answer') }}</h2>
               <div class="toolbar">
                 <span :class="['tag', riskClass]">{{ t('risk') }}: {{ riskText }}</span>
+                <span class="tag">{{ t('answerSource') }}: {{ answerSourceText }}</span>
                 <span class="tag">{{ t('provider') }}: {{ provider }}</span>
               </div>
             </div>
@@ -152,16 +155,19 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import { chat, chatWithFile, getRecommendedQuestions, getTenantCode, getTenantPublic, setTenantCode, stopChatGeneration, submitFeedback } from '@/api'
+import { chat, chatWithFile, getRecommendedQuestions, getScenarios, getTenantCode, getTenantPublic, setTenantCode, stopChatGeneration, submitFeedback } from '@/api'
 import { useI18n } from '@/i18n'
 import { displayedRiskLevel as getDisplayedRiskLevel, normalizeRiskLevel, riskFromAnswer } from '@/utils/risk'
 import AppSelect from '@/components/AppSelect.vue'
 import AppTopbar from '@/components/AppTopbar.vue'
 
 const { t, locale, riskLabel } = useI18n()
+// tenantCode is restored from localStorage so refresh does not lose the active tenant context.
 const tenantCode = ref(getTenantCode())
 const tenant = ref({})
 const question = ref('')
+const activeScenario = ref(localStorage.getItem('chat_scenario_id') || 'social_security')
+const scenarios = ref([])
 const userRole = ref(localStorage.getItem('chat_user_role') || 'employee')
 const province = ref(localStorage.getItem('chat_province') || '陕西省')
 const city = ref(localStorage.getItem('chat_city') || '西安市')
@@ -170,6 +176,8 @@ const sources = ref([])
 const tasks = ref([])
 const suggestions = ref([])
 const provider = ref('')
+const answerSource = ref('')
+const answerSourceLabel = ref('')
 const riskLevel = ref('medium')
 const questionId = ref(null)
 const recommended = ref([])
@@ -188,6 +196,15 @@ const LAST_CHAT_KEY = 'chat_last_state'
 const displayedRiskLevel = computed(() => getDisplayedRiskLevel({ answer: answer.value, risk_level: riskLevel.value }))
 const riskText = computed(() => riskLabel(displayedRiskLevel.value))
 const riskClass = computed(() => displayedRiskLevel.value === 'high' ? 'danger' : displayedRiskLevel.value === 'medium' ? 'warning' : 'success')
+const answerSourceText = computed(() => answerSourceLabel.value || answerSourceMap[answerSource.value] || answerSource.value || '-')
+const answerSourceMap = {
+  router_direct: '路由直出',
+  scene_boundary: '场景边界直出',
+  faq_direct: 'FAQ 向量库直出',
+  hybrid_retrieval_llm: '混合检索 + 大模型生成',
+  hybrid_retrieval_template: '混合检索 + 模板兜底',
+  error: '异常兜底'
+}
 const userRoleOptions = computed(() => [
   { value: 'enterprise_hr', label: t('roleEnterpriseHr') },
   { value: 'administrator_staff', label: t('roleAdministrativeStaff') },
@@ -195,6 +212,10 @@ const userRoleOptions = computed(() => [
   { value: 'employee', label: t('roleEmployee') },
   { value: 'admin_user', label: t('roleAdminUser') }
 ])
+const scenarioOptions = computed(() => scenarios.value.map(item => ({
+  value: item.id,
+  label: item.label
+})))
 const regionTree = {
   '北京市': ['北京市'],
   '天津市': ['天津市'],
@@ -237,6 +258,8 @@ const clearAnswer = () => {
   tasks.value = []
   suggestions.value = []
   provider.value = ''
+  answerSource.value = ''
+  answerSourceLabel.value = ''
   riskLevel.value = 'medium'
   questionId.value = null
   feedbackSubmitted.value = false
@@ -253,6 +276,8 @@ const saveLastChat = () => {
     tasks: tasks.value,
     suggestions: suggestions.value,
     provider: provider.value,
+    answerSource: answerSource.value,
+    answerSourceLabel: answerSourceLabel.value,
     riskLevel: displayedRiskLevel.value,
     questionId: questionId.value
   }))
@@ -270,6 +295,8 @@ const restoreLastChat = () => {
     tasks.value = data.tasks || []
     suggestions.value = data.suggestions || []
     provider.value = data.provider || ''
+    answerSource.value = data.answerSource || ''
+    answerSourceLabel.value = data.answerSourceLabel || ''
     riskLevel.value = riskFromAnswer(data.answer) || normalizeRiskLevel(data.riskLevel) || 'medium'
     questionId.value = data.questionId || null
   } catch (error) {
@@ -297,9 +324,23 @@ const loadTenant = async () => {
   }
 }
 
+const loadScenarios = async () => {
+  try {
+    const res = await getScenarios()
+    scenarios.value = res.data || []
+  } catch (error) {
+    scenarios.value = [
+      { id: 'social_security', label: '社保医保合规' },
+      { id: 'labor_compliance', label: '用工合规' },
+      { id: 'leave_benefits', label: '假期福利' },
+      { id: 'dispute_service', label: '劳动争议办事' }
+    ]
+  }
+}
+
 const loadRecommended = async () => {
   try {
-    const res = await getRecommendedQuestions()
+    const res = await getRecommendedQuestions({ scenario_id: activeScenario.value })
     recommended.value = res.data || []
   } catch (error) {
     recommended.value = [
@@ -329,6 +370,7 @@ const removeFile = () => {
   }
 }
 
+// submitQuestion is the main UI entry point for one QA request.
 const submitQuestion = async () => {
   if (!question.value.trim() || loading.value) return
   const submittedQuestion = question.value
@@ -343,6 +385,7 @@ const submitQuestion = async () => {
     const payload = {
       question: question.value,
       generation_id: generationId,
+      scenario_id: activeScenario.value,
       user_id: localStorage.getItem('user_id') || 'demo-user',
       tenant_code: tenantCode.value,
       language: locale.value,
@@ -359,6 +402,8 @@ const submitQuestion = async () => {
     tasks.value = data.related_tasks || []
     suggestions.value = data.suggestions || []
     provider.value = data.provider || 'local_faq'
+    answerSource.value = data.answer_source || data.retrieval?.answer_source || ''
+    answerSourceLabel.value = data.retrieval?.answer_source_label || ''
     riskLevel.value = riskFromAnswer(data.answer) || normalizeRiskLevel(data.risk_level) || 'medium'
     questionId.value = data.question_id
     answeredQuestion.value = submittedQuestion
@@ -389,6 +434,8 @@ const stopGeneration = async () => {
   tasks.value = []
   suggestions.value = []
   provider.value = ''
+  answerSource.value = ''
+  answerSourceLabel.value = ''
   if (generationId) {
     try {
       await stopChatGeneration({
@@ -417,6 +464,7 @@ const sendFeedback = async (isHelpful) => {
 
 onMounted(() => {
   restoreLastChat()
+  loadScenarios()
   loadTenant()
   loadRecommended()
 })
@@ -431,6 +479,11 @@ watch(question, (value) => {
 
 watch(userRole, (value) => {
   localStorage.setItem('chat_user_role', value)
+})
+
+watch(activeScenario, (value) => {
+  localStorage.setItem('chat_scenario_id', value)
+  loadRecommended()
 })
 
 watch(province, (value) => {
@@ -448,6 +501,10 @@ watch(city, (value) => {
 }
 
 .role-select {
+  width: 150px;
+}
+
+.scenario-select {
   width: 150px;
 }
 
