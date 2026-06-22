@@ -1,0 +1,48 @@
+{
+  "project": "smart-labor-compliance-phase2-mvp",
+  "vector_db": "Milvus",
+  "index_type": "IVF_PQ",
+  "index_params": {
+    "index_type": "IVF_PQ",
+    "metric_type": "COSINE",
+    "params": {
+      "nlist": 128,
+      "m": 16,
+      "nbits": 8
+    }
+  },
+  "scenarios": [
+    {
+      "scenario_id": "social_security",
+      "label": "社保医保合规",
+      "faq_records": 6,
+      "doc_chunks": 1,
+      "faq_filter_expr": "scenario_id == \"social_security\" and source_type == \"faq\" and tenant_id == \"default\" and kb_version == \"phase2_mvp\"",
+      "doc_filter_expr": "scenario_id == \"social_security\" and source_type == \"doc\" and tenant_id == \"default\" and kb_version == \"phase2_mvp\""
+    },
+    {
+      "scenario_id": "labor_compliance",
+      "label": "用工合规",
+      "faq_records": 6,
+      "doc_chunks": 1,
+      "faq_filter_expr": "scenario_id == \"labor_compliance\" and source_type == \"faq\" and tenant_id == \"default\" and kb_version == \"phase2_mvp\"",
+      "doc_filter_expr": "scenario_id == \"labor_compliance\" and source_type == \"doc\" and tenant_id == \"default\" and kb_version == \"phase2_mvp\""
+    },
+    {
+      "scenario_id": "leave_benefits",
+      "label": "假期福利",
+      "faq_records": 5,
+      "doc_chunks": 1,
+      "faq_filter_expr": "scenario_id == \"leave_benefits\" and source_type == \"faq\" and tenant_id == \"default\" and kb_version == \"phase2_mvp\"",
+      "doc_filter_expr": "scenario_id == \"leave_benefits\" and source_type == \"doc\" and tenant_id == \"default\" and kb_version == \"phase2_mvp\""
+    },
+    {
+      "scenario_id": "dispute_service",
+      "label": "劳动争议办事",
+      "faq_records": 6,
+      "doc_chunks": 1,
+      "faq_filter_expr": "scenario_id == \"dispute_service\" and source_type == \"faq\" and tenant_id == \"default\" and kb_version == \"phase2_mvp\"",
+      "doc_filter_expr": "scenario_id == \"dispute_service\" and source_type == \"doc\" and tenant_id == \"default\" and kb_version == \"phase2_mvp\""
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "backend": "milvus_langchain",
+  "faq_collection": "slc_phase2_faq_vectors_dedicated",
+  "doc_collection": "slc_phase2_doc_vectors_dedicated",
+  "index_params": {
+    "index_type": "IVF_PQ",
+    "metric_type": "COSINE",
+    "params": {
+      "nlist": 128,
+      "m": 16,
+      "nbits": 8
+    }
+  },
+  "scenarios": [
+    {
+      "scenario_id": "social_security",
+      "faq_records": 28,
+      "doc_chunks": 3,
+      "faq_filter_expr": "scenario_id == \"social_security\" and source_type == \"faq\" and tenant_id == \"default\" and kb_version == \"phase2_mvp\"",
+      "doc_filter_expr": "scenario_id == \"social_security\" and source_type == \"doc\" and tenant_id == \"default\" and kb_version == \"phase2_mvp\""
+    },
+    {
+      "scenario_id": "labor_compliance",
+      "faq_records": 19,
+      "doc_chunks": 3,
+      "faq_filter_expr": "scenario_id == \"labor_compliance\" and source_type == \"faq\" and tenant_id == \"default\" and kb_version == \"phase2_mvp\"",
+      "doc_filter_expr": "scenario_id == \"labor_compliance\" and source_type == \"doc\" and tenant_id == \"default\" and kb_version == \"phase2_mvp\""
+    },
+    {
+      "scenario_id": "leave_benefits",
+      "faq_records": 14,
+      "doc_chunks": 3,
+      "faq_filter_expr": "scenario_id == \"leave_benefits\" and source_type == \"faq\" and tenant_id == \"default\" and kb_version == \"phase2_mvp\"",
+      "doc_filter_expr": "scenario_id == \"leave_benefits\" and source_type == \"doc\" and tenant_id == \"default\" and kb_version == \"phase2_mvp\""
+    },
+    {
+      "scenario_id": "dispute_service",
+      "faq_records": 16,
+      "doc_chunks": 3,
+      "faq_filter_expr": "scenario_id == \"dispute_service\" and source_type == \"faq\" and tenant_id == \"default\" and kb_version == \"phase2_mvp\"",
+      "doc_filter_expr": "scenario_id == \"dispute_service\" and source_type == \"doc\" and tenant_id == \"default\" and kb_version == \"phase2_mvp\""
+    }
+  ]
+}
